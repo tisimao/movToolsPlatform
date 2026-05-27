@@ -28,7 +28,6 @@ const roleLabelMap: Record<string, string> = {
   producer: '制片',
   director: '导演',
   maker: '制作人员',
-  staff: '制作人员',
   viewer: '只读查看者',
 };
 

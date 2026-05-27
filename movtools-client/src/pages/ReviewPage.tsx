@@ -359,7 +359,6 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     if (currentShotFeedbackView?.shotId !== activeShotId) return '当前镜头反馈未加载完成';
     if (isContextShot) return '上下文陪审镜头不参与正式审片结论';
     if (effectiveInternalReviewStatus !== 'IN_DIRECTOR_REVIEW') return '当前镜头不在审片中';
-    if (effectiveInternalReviewStatus === 'DIRECTOR_APPROVED') return '当前镜头已处于内部通过状态';
     if (hasPendingDrawingChanges) return '存在待提交绘制修改时不可通过';
     if (reviewFeedbacks.length > 0 && currentDrafts.length > 0) return '存在待提交修改和反馈记录时不可通过';
     if (reviewFeedbacks.length > 0) return '存在反馈记录时不可通过';

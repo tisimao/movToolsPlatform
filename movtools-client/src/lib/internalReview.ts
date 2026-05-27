@@ -100,6 +100,7 @@ export function canResubmitForReview(role: AppRole, status?: InternalReviewStatu
  * 按钮只应在此条件为 true 时显示。
  */
 export function canMarkFixUpdated(role: AppRole, status?: InternalReviewStatusCode | null): boolean {
+  console.log('canMarkFixUpdated role:', role);
   return role === 'maker' && status === 'PENDING_FEEDBACK_FIX';
 }
 

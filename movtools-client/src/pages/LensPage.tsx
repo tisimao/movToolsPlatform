@@ -24,41 +24,56 @@ import { filterDirectorVisibleReviewTasks } from '../lib/reviewTaskVisibility';
 import { DEFAULT_REVIEW_PLAYBACK_FPS } from '../lib/reviewPlaybackFps';
 import { resolveProjectPlaybackFps } from '../lib/projectPlaybackFps';
 
+/** 镜头编辑表单的状态结构 */
 interface LensFormState {
-  lensCode: string;
-  sceneNo: string;
-  lensName: string;
-  singleFrame: string;
-  makerUserId: string;
-  makerNameRaw: string;
-  keepMakerNameRaw: boolean;
-  versionNum: string;
-  lensStatus: LensStatus;
+  lensCode: string;        /** 镜头编号 */
+  sceneNo: string;         /** 场次号 */
+  lensName: string;        /** 镜头名称 */
+  singleFrame: string;     /** 单镜头帧数 */
+  makerUserId: string;     /** 制作人员用户 ID */
+  makerNameRaw: string;    /** 原始制作人员姓名（导入时来源） */
+  keepMakerNameRaw: boolean; /** 是否保留原始姓名线索 */
+  versionNum: string;      /** 版本号 */
+  lensStatus: LensStatus;  /** 镜头生命周期状态 */
 }
 
+/** 镜头状态筛选器：可选全部或某具体状态 */
 type LensStatusFilter = LensStatus | 'all';
+/** 版本文件完整性筛选：全部 / 完整 / 缺项 */
 type ReadinessFilter = 'all' | 'ready' | 'missing';
+/** 缺项类型筛选：全部 / 任意缺项 / 缺 ma / 缺 mov / 缺 layout */
 type MissingItemFilter = 'all' | 'any' | 'ma' | 'mov' | 'layout';
+/** 镜头列表排序字段 */
 type LensSortField = 'sequence' | 'lensCode' | 'updateTime' | 'versionNum' | 'maker';
+/** 排序方向：升序 / 降序 */
 type SortDirection = 'asc' | 'desc';
+/** 问题类型筛选 */
 type ProblemTypeFilter =
   | 'all'
-  | 'layout-missing'
-  | 'layout-unselected'
-  | 'layout-selected-missing'
-  | 'ma-unbound'
-  | 'mov-unbound'
-  | 'multi-candidate'
-  | 'frame-mismatch';
+  | 'layout-missing'        /** Layout 未发现候选 */
+  | 'layout-unselected'     /** Layout 候选未确认采用 */
+  | 'layout-selected-missing' /** Layout 当前采用项磁盘缺失 */
+  | 'ma-unbound'            /** MA 未绑定或缺失 */
+  | 'mov-unbound'           /** MOV 未绑定或缺失 */
+  | 'multi-candidate'       /** 多候选待确认 */
+  | 'frame-mismatch';       /** 帧数不匹配 */
+/** 二级审片状态筛选 */
 type InternalReviewFilter = 'all' | InternalReviewStatusCode;
+/** 近期操作类型筛选 */
 type RecentActionFilter = 'all' | LensRecentStatusAction;
+/** 近期时间范围筛选 */
 type RecentTimeRangeFilter = 'all' | 'today' | 'last2days' | 'last7days' | 'custom';
+/** 镜头详情标签页 */
 type LensDetailTab = 'versions' | 'layout' | 'history' | 'director-feedback';
+/** 视频预览目标：制作视频 / Layout 视频 */
 type PreviewTarget = 'production' | 'layout';
+/** 视频预览错误状态 */
 type PreviewErrorState = Partial<Record<PreviewTarget, string>>;
 
+/** 镜头表格列键名 */
 type LensColumnKey = 'lensCode' | 'sceneNo' | 'lensName' | 'maker' | 'lensStatus' | 'internalReviewStatus' | 'singleFrame' | 'versionNum' | 'currentVersionReady' | 'layout' | 'layoutVideo' | 'updateTime' | 'recentAction';
 
+/** 镜头表格各列的中文标题映射 */
 const LENS_COLUMN_LABELS: Record<LensColumnKey, string> = {
   lensCode: '镜头编号',
   sceneNo: '场次',
@@ -75,8 +90,10 @@ const LENS_COLUMN_LABELS: Record<LensColumnKey, string> = {
   recentAction: '最近状态动作',
 };
 
+/** 镜头表格列的固定显示顺序 */
 const LENS_COLUMN_ORDER: LensColumnKey[] = ['lensCode', 'sceneNo', 'lensName', 'maker', 'lensStatus', 'internalReviewStatus', 'singleFrame', 'versionNum', 'currentVersionReady', 'layout', 'layoutVideo', 'updateTime', 'recentAction'];
 
+/** 默认镜头列显隐配置（全部显示） */
 const DEFAULT_LENS_COLUMNS: Record<LensColumnKey, boolean> = {
   lensCode: true,
   sceneNo: true,
@@ -93,41 +110,47 @@ const DEFAULT_LENS_COLUMNS: Record<LensColumnKey, boolean> = {
   recentAction: true,
 };
 
+/** 返修弹窗状态：支持单镜头和批量两种模式 */
 interface ReworkDialogState {
-  mode: 'single' | 'batch';
-  lensId?: string;
-  lensName?: string;
-  lensCount?: number;
-  imagePaths: string[];
+  mode: 'single' | 'batch'; /** 单镜头 / 批量模式 */
+  lensId?: string;           /** 单镜头模式的镜头 ID */
+  lensName?: string;         /** 单镜头模式的镜头名称 */
+  lensCount?: number;        /** 批量模式的镜头数量 */
+  imagePaths: string[];      /** 待插入的返修图片路径列表 */
 }
 
+/** 镜头编辑器弹窗状态 */
 interface LensEditorDialogState {
-  mode: 'create' | 'edit';
-  lensId?: string;
+  mode: 'create' | 'edit';  /** 新建 / 编辑模式 */
+  lensId?: string;           /** 编辑模式下的镜头 ID */
 }
 
+/** 详情弹窗尺寸 */
 interface DetailModalSize {
-  width: number;
-  height: number;
+  width: number;   /** 弹窗宽度 px */
+  height: number;  /** 弹窗高度 px */
 }
 
+/** 返修记录编辑器状态 */
 interface ReworkRecordEditorState {
-  lensId: string;
-  eventId: string;
-  title: string;
-  note: string;
-  attachments: LensLifecycleAttachment[];
-  keptAttachmentIds: string[];
-  newImagePaths: string[];
+  lensId: string;                 /** 所属镜头 ID */
+  eventId: string;                /** 历史事件 ID */
+  title: string;                  /** 事件标题 */
+  note: string;                   /** 返修说明 */
+  attachments: LensLifecycleAttachment[]; /** 已保存的附件 */
+  keptAttachmentIds: string[];    /** 保存后需保留的附件 ID 列表 */
+  newImagePaths: string[];        /** 新增的本地图片路径列表 */
 }
 
+/** 返修附件预览状态 */
 interface ReworkAttachmentPreviewState {
-  attachments: LensLifecycleAttachment[];
-  activeIndex: number;
+  attachments: LensLifecycleAttachment[]; /** 附件列表 */
+  activeIndex: number;                    /** 当前预览的附件索引 */
 }
 
 
 
+/** 镜头表单默认值 */
 const defaultForm: LensFormState = {
   lensCode: '',
   sceneNo: '',
@@ -140,20 +163,28 @@ const defaultForm: LensFormState = {
   lensStatus: '制作',
 };
 
+/** 镜头默认帧率，来源于默认回放帧率 */
 const DEFAULT_LENS_FPS = DEFAULT_REVIEW_PLAYBACK_FPS;
 
+/** 从完整文件路径中提取文件名 */
 function getFileNameFromPath(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
 }
 
+/** 规范化路径用于比较：统一分隔符、去尾部斜杠、转大写 */
 function normalizePathForComparison(value: string): string {
   return value.replace(/[\\/]+/g, '\\').replace(/[\\/]+$/g, '').toUpperCase();
 }
 
+/** 获取指定文件类型的默认源根目录代码 */
 function getDefaultSourceRoot(fileType: BindFileType): string {
   return 'lens-root-main';
 }
 
+/**
+ * 获取镜头制作人员的匹配状态
+ * 优先级：已存储的状态 > 已绑定用户 ID > 有原始姓名线索 > 未指派
+ */
 function getLensMakerMatchStatus(lens: LensRecord): MakerMatchStatus {
   if (lens.makerMatchStatus) {
     return lens.makerMatchStatus;
@@ -170,6 +201,10 @@ function getLensMakerMatchStatus(lens: LensRecord): MakerMatchStatus {
   return 'unassigned';
 }
 
+/**
+ * 获取镜头制作人员的显示文本
+ * 匹配状态时优先显示项目成员显示名；未匹配时显示原始姓名；未指派时返回固定文本
+ */
 function getLensMakerDisplayText(lens: LensRecord, projectMembers: Array<{ userId: string; userName: string; displayName: string }>): string {
   const status = getLensMakerMatchStatus(lens);
   const matchedMember = lens.makerUserId ? projectMembers.find((member) => member.userId === lens.makerUserId) : null;
@@ -185,6 +220,7 @@ function getLensMakerDisplayText(lens: LensRecord, projectMembers: Array<{ userI
   return '未指派';
 }
 
+/** 获取制作人员匹配状态的中文标签 */
 function getLensMakerStatusLabel(status: MakerMatchStatus): string {
   switch (status) {
     case 'matched':
@@ -197,6 +233,10 @@ function getLensMakerStatusLabel(status: MakerMatchStatus): string {
   }
 }
 
+/**
+ * 根据文件路径自动解析对应的源根目录代码
+ * 通过客户端路径映射匹配最长前缀，未匹配则返回默认根目录
+ */
 async function resolveSourceRoot(filePath: string, fileType: BindFileType): Promise<string> {
   const response = await pathMappingService.getClientPathMappings();
   if (response.success) {
@@ -216,22 +256,30 @@ async function resolveSourceRoot(filePath: string, fileType: BindFileType): Prom
   return getDefaultSourceRoot(fileType);
 }
 
+/** 返回一个表示成功的空变更结果 */
 function emptyMutation(): LensMutationResponse {
   return { success: true };
 }
 
+/** LensPage 组件属性：可选的页面导航回调 */
 interface LensPageProps {
   onNavigate?: (page: string) => void;
 }
 
+/**
+ * 镜头管理页面主组件
+ * 提供镜头列表展示、筛选排序、批量操作、详情查看、状态流转、Layout 协作等功能
+ */
 export function LensPage({ onNavigate }: LensPageProps) {
+  /* ========== 权限与角色 ========== */
   const { user } = useAuthStore();
-  const currentRole = getPrimaryRole(user);
-  const isMaker = currentRole === 'maker';
-  const isProducer = currentRole === 'producer';
+  const currentRole = getPrimaryRole(user);       /** 当前用户角色 */
+  const isMaker = currentRole === 'maker';          /** 是否为制作人员 */
+  const isProducer = currentRole === 'producer';    /** 是否为制片 */
   const canOpenProducerReviewTask = currentRole === 'producer';
   const canCompleteFeedbackFix = currentRole === 'maker' || currentRole === 'producer' || currentRole === 'admin' || currentRole === 'system-admin';
-  const columnStorageKey = `movtools.lens.columns.v1:${currentRole}`;
+  const columnStorageKey = `movtools.lens.columns.v1:${currentRole}`;  /** 列配置本地存储键 */
+  /* ========== Store 数据 ========== */
   const {
     activeProjectId: workspaceActiveProjectId,
     activeEpisodeId: workspaceActiveEpisodeId,
@@ -242,61 +290,91 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const { dataSource } = useDataSourceStore();
   const { activeProjectId, activeProjectName, activeEpisodeId, activeEpisodeName, activeEpisodeCode, lenses, setLensList } = useLensStore();
   const { pendingLensId, clearPendingLensId, setPendingReviewTaskId } = useDirectorNavigationStore();
+
+  /* ========== 表单状态 ========== */
   const [form, setForm] = useState<LensFormState>(defaultForm);
   const [editingLensId, setEditingLensId] = useState<string | null>(null);
   const [result, setResult] = useState<LensMutationResponse>(emptyMutation);
+
+  /* ========== 加载状态 ========== */
   const [isLoading, setIsLoading] = useState(false);
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState<LensStatusFilter>('all');
-  const [makerFilter, setMakerFilter] = useState('all');
-  const [showClosedLenses, setShowClosedLenses] = useState(false);
-  const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>('all');
-  const [missingItemFilter, setMissingItemFilter] = useState<MissingItemFilter>('all');
-  const [problemTypeFilter, setProblemTypeFilter] = useState<ProblemTypeFilter>('all');
-  const [recentActionFilter, setRecentActionFilter] = useState<RecentActionFilter>('all');
-  const [recentTimeRangeFilter, setRecentTimeRangeFilter] = useState<RecentTimeRangeFilter>('all');
-  const [internalReviewFilter, setInternalReviewFilter] = useState<InternalReviewFilter>('all');
-  const [recentStartDate, setRecentStartDate] = useState('');
-  const [recentEndDate, setRecentEndDate] = useState('');
+
+  /* ========== 筛选状态 ========== */
+  const [searchKeyword, setSearchKeyword] = useState('');           /** 搜索关键词 */
+  const [statusFilter, setStatusFilter] = useState<LensStatusFilter>('all');       /** 状态筛选 */
+  const [makerFilter, setMakerFilter] = useState('all');            /** 制作人员筛选 */
+  const [showClosedLenses, setShowClosedLenses] = useState(false);  /** 是否显示已关闭镜头 */
+  const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>('all');   /** 版本完整性筛选 */
+  const [missingItemFilter, setMissingItemFilter] = useState<MissingItemFilter>('all');  /** 缺项类型筛选 */
+  const [problemTypeFilter, setProblemTypeFilter] = useState<ProblemTypeFilter>('all');  /** 问题类型筛选 */
+  const [recentActionFilter, setRecentActionFilter] = useState<RecentActionFilter>('all');  /** 近期操作筛选 */
+  const [recentTimeRangeFilter, setRecentTimeRangeFilter] = useState<RecentTimeRangeFilter>('all');  /** 时间范围筛选 */
+  const [internalReviewFilter, setInternalReviewFilter] = useState<InternalReviewFilter>('all');  /** 二级状态筛选 */
+  const [recentStartDate, setRecentStartDate] = useState('');      /** 自定义起始日期 */
+  const [recentEndDate, setRecentEndDate] = useState('');          /** 自定义结束日期 */
+
+  /* ========== 选择与详情状态 ========== */
   const [selectedLensIds, setSelectedLensIds] = useState<string[]>([]);
   const [activeDetail, setActiveDetail] = useState<LensDetailPayload | null>(null);
   const [detailSearch, setDetailSearch] = useState('');
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+
+  /* ========== 返修弹窗状态 ========== */
   const [reworkDialog, setReworkDialog] = useState<ReworkDialogState | null>(null);
   const [reworkNote, setReworkNote] = useState('');
   const [reworkRecordEditor, setReworkRecordEditor] = useState<ReworkRecordEditorState | null>(null);
   const [isSavingReworkRecord, setIsSavingReworkRecord] = useState(false);
   const [previewingReworkAttachment, setPreviewingReworkAttachment] = useState<ReworkAttachmentPreviewState | null>(null);
+
+  /* ========== 编辑器弹窗状态 ========== */
   const [editorDialog, setEditorDialog] = useState<LensEditorDialogState | null>(null);
+
+  /* ========== 审片相关状态 ========== */
   const [activeReviewTaskId, setActiveReviewTaskId] = useState<string | null>(null);
+
+  /* ========== 排序状态 ========== */
   const [sortField, setSortField] = useState<LensSortField>('lensCode');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  /* ========== 批量操作状态 ========== */
   const [pendingBatchAction, setPendingBatchAction] = useState<'refresh' | 'submit' | 'approve' | 'rework' | 'close' | 'delete' | null>(null);
   const [draftTasks, setDraftTasks] = useState<import('../types/review').ReviewTaskSummary[]>([]);
   const [pendingStatusLensId, setPendingStatusLensId] = useState<string | null>(null);
+
+  /* ========== 导演反馈状态 ========== */
   const [detailTab, setDetailTab] = useState<LensDetailTab>('versions');
   const [directorFeedbackView, setDirectorFeedbackView] = useState<ShotFeedbackView | null>(null);
   const [directorFeedbackSeekTarget, setDirectorFeedbackSeekTarget] = useState<{ frameNumber: number; requestId: number } | null>(null);
   const directorFeedbackSeekRequestRef = useRef(0);
+
+  /* ========== 详情弹窗尺寸状态 ========== */
   const [detailModalSize, setDetailModalSize] = useState<DetailModalSize | null>(null);
   const [isDetailModalMaximized, setIsDetailModalMaximized] = useState(false);
-  const listRequestSeqRef = useRef(0);
+  const listRequestSeqRef = useRef(0);          /** 列表请求序列号，用于丢弃过期响应 */
   const detailResizeRef = useRef<{ startX: number; startY: number; startWidth: number; startHeight: number } | null>(null);
-  const detailRequestSeqRef = useRef(0);
+  const detailRequestSeqRef = useRef(0);        /** 详情请求序列号，用于丢弃过期响应 */
+
+  /* ========== 视频预览状态 ========== */
   const productionVideoRef = useRef<HTMLVideoElement | null>(null);
   const layoutVideoRef = useRef<HTMLVideoElement | null>(null);
   const [previewErrors, setPreviewErrors] = useState<PreviewErrorState>({});
   const [previewLoadStates, setPreviewLoadStates] = useState<Partial<Record<PreviewTarget, boolean>>>({});
+
+  /* ========== 列显隐设置 ========== */
   const [visibleColumns, setVisibleColumns] = useState<Record<LensColumnKey, boolean>>(DEFAULT_LENS_COLUMNS);
   const columnPanelStorageKey = `movtools.lens.columns.panel-collapsed.v1:${currentRole}`;
   const [isColumnSettingsCollapsed, setIsColumnSettingsCollapsed] = useState(true);
+
+  /* ========== 权限衍生常量 ========== */
   const canEditLens = currentRole === 'producer' || currentRole === 'admin' || currentRole === 'system-admin';
   const canModifyLensList = canEditLens;
+  const canShowLensActions = canModifyLensList || currentRole === 'maker';
   const canUseLensMaintenance = true;
   const canUseBulkActions = !isMaker;
   const canUseLocalFileChecks = canUseLocalFileChecksPermission(user);
   const canUseInternalReviewActions = currentRole === 'producer' || currentRole === 'maker' || currentRole === 'admin' || currentRole === 'system-admin';
 
+  /* ========== 列显隐配置 - 从 localStorage 恢复 ========== */
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(columnStorageKey);
@@ -311,6 +389,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }, [columnStorageKey]);
 
+  /* ========== 列设置面板折叠状态 - 从 localStorage 恢复 ========== */
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(columnPanelStorageKey);
@@ -325,10 +404,12 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }, [columnPanelStorageKey]);
 
+  /* ========== 列显隐配置 - 持久化到 localStorage ========== */
   useEffect(() => {
     window.localStorage.setItem(columnStorageKey, JSON.stringify(visibleColumns));
   }, [columnStorageKey, visibleColumns]);
 
+  /* ========== 列设置面板折叠状态 - 持久化到 localStorage ========== */
   useEffect(() => {
     try {
       window.localStorage.setItem(columnPanelStorageKey, isColumnSettingsCollapsed ? '1' : '0');
@@ -337,6 +418,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }, [columnPanelStorageKey, isColumnSettingsCollapsed]);
 
+  /** 导演导航跳转过来的待打开镜头 ID 处理 */
   useEffect(() => {
     if (!pendingLensId) {
       return;
@@ -352,8 +434,10 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }, [activeDetail?.lens.lensId, clearPendingLensId, pendingLensId]);
 
+  /** 当前可见的表格列列表 */
   const visibleLensColumns = useMemo(() => LENS_COLUMN_ORDER.filter((column) => visibleColumns[column]), [visibleColumns]);
 
+  /** 更新某列的显隐状态；镜头编号和状态列不可隐藏 */
   function updateLensColumn(column: LensColumnKey, nextValue: boolean): void {
     if ((column === 'lensCode' || column === 'lensStatus') && !nextValue) {
       return;
@@ -362,14 +446,17 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setVisibleColumns((current) => ({ ...current, [column]: nextValue }));
   }
 
+  /** 重置列显隐为默认值 */
   function resetLensColumns(): void {
     setVisibleColumns(DEFAULT_LENS_COLUMNS);
   }
 
+  /** 切换列设置面板的折叠/展开 */
   function toggleColumnSettings(): void {
     setIsColumnSettingsCollapsed((current) => !current);
   }
 
+  /** 检查当前角色是否有镜头写权限；无权限时设置错误并返回 true */
   function denyLensWrite(): boolean {
     if (canEditLens) {
       return false;
@@ -379,10 +466,15 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return true;
   }
 
+  /** 渲染可见列的 <th> 表头 */
   function renderVisibleTableHeaders(): ReactElement[] {
     return visibleLensColumns.map((column) => <th key={column}>{LENS_COLUMN_LABELS[column]}</th>);
   }
 
+  /**
+   * 根据列键名渲染对应列的表格单元格内容
+   * 包括镜头编号（可点击打开详情）、制作人员（含匹配状态）、状态标签、版本完整性、Layout 状态、视频状态等
+   */
   function renderVisibleTableCell(lens: LensRecord, column: LensColumnKey): ReactElement | string | number {
     switch (column) {
       case 'lensCode':
@@ -469,10 +561,15 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /**
+   * 渲染单行镜头的操作按钮组
+   * 根据角色和镜头状态显示提交/通过/返修/关闭/检查文件/编辑等按钮
+   */
   function renderLensRowActions(lens: LensRecord): ReactElement {
     if (!canModifyLensList) {
       return (
         <div className="lens-row-actions">
+          {renderInternalReviewActions(lens)}
           <button className="secondary-button lens-row-action-utility" onClick={() => void openLensDetail(lens.lensId)} type="button">查看详情</button>
           {canUseLocalFileChecks ? <button className="secondary-button lens-row-action-utility" onClick={() => void handleSingleLensCheck(lens.lensId)} type="button">检查文件</button> : null}
         </div>
@@ -481,6 +578,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
     return (
       <div className="lens-row-actions">
+        {/* 状态流转操作区 */}
         <div className="lens-row-action-group lens-row-action-group--status">
           <span className="lens-row-action-group-label">状态</span>
           <div className="lens-row-actions-grid">
@@ -509,7 +607,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
             ) : null}
           </div>
         </div>
+        {/* 二级审片状态操作区 */}
         {renderInternalReviewActions(lens)}
+        {/* 维护操作区 */}
         <div className="lens-row-action-group lens-row-action-group--utility">
           <span className="lens-row-action-group-label">维护</span>
           <div className="lens-row-actions-grid">
@@ -525,6 +625,34 @@ export function LensPage({ onNavigate }: LensPageProps) {
     );
   }
 
+  /**
+   * 渲染镜头行内"二级审片状态"操作按钮组。
+   *
+   * 二级审片状态（internalReviewStatusCode）是独立于镜头主生命周期（制作/提交/通过/返修/关闭）
+   * 的一套平行状态机，用于追踪镜头在导演审片流程中的进度：
+   *
+   *   状态流转顺序：
+   *   NOT_IN_REVIEW（未进入审片）
+   *       ↓ 制作人点击"标记待提审"（canMarkReadyForReview）
+   *   READY_FOR_REVIEW（待提审）
+   *       ↓ 制作人将镜头加入审片任务
+   *   IN_DIRECTOR_REVIEW（审片中）
+   *       ↓ 导演在审片中给出反馈
+   *   PENDING_FEEDBACK_FIX（待处理反馈）
+   *       ↓ 制作/返修人员点击"确认本轮反馈已处理完成"（canMarkFixUpdated）
+   *   FIX_UPDATED（已按反馈修改）
+   *       ↓ 制作人点击"重新提审"（canResubmitForReview，回到 READY_FOR_REVIEW）
+   *   DIRECTOR_APPROVED（内部通过）—— 终态
+   *
+   * 当前函数根据 lens.internalReviewStatusCode 和当前用户角色 currentRole，
+   * 用三个权限判断函数（canMarkReadyForReview / canResubmitForReview / canMarkFixUpdated）
+   * 来决定显示哪些按钮：
+   *   - "标记待提审"：NOT_IN_REVIEW → READY_FOR_REVIEW，表示制作人确认镜头已准备好进入审片
+   *   - "重新提审"：FIX_UPDATED → READY_FOR_REVIEW，表示修改后的镜头可以再次送审
+   *   - "确认本轮反馈已处理完成"：PENDING_FEEDBACK_FIX → FIX_UPDATED，表示已按导演意见修改完成
+   *
+   * 同时，如果镜头已关联审片任务（lens.latestReviewTaskId），则在按钮下方显示任务 ID 前缀。
+   */
   function renderInternalReviewActions(lens: LensRecord): ReactElement {
     return (
       <div className="lens-row-action-group lens-row-action-group--review">
@@ -547,6 +675,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     );
   }
 
+  /** 从服务端刷新镜头列表，支持请求序列号防并发 */
   async function refreshLenses(): Promise<void> {
     const requestSeq = listRequestSeqRef.current + 1;
     listRequestSeqRef.current = requestSeq;
@@ -578,6 +707,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 关闭镜头详情弹窗，同时清空审片、反馈、返修记录等关联状态 */
   function closeActiveDetail(): void {
     detailRequestSeqRef.current += 1;
     setActiveDetail(null);
@@ -589,6 +719,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setIsDetailLoading(false);
   }
 
+  /** 打开指定镜头的详情弹窗，包含版本/Layout/历史/导演反馈标签页 */
   async function openLensDetail(lensId: string): Promise<void> {
     const requestSeq = detailRequestSeqRef.current + 1;
     detailRequestSeqRef.current = requestSeq;
@@ -624,6 +755,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 静默或非静默刷新当前打开的镜头详情 */
   async function refreshActiveDetail(options?: { silent?: boolean }): Promise<void> {
     if (!activeDetail) {
       return;
@@ -655,6 +787,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 从服务端刷新导演反馈列表并构建按版本域划分的反馈视图 */
   async function refreshDirectorFeedbacks(lensId: string, currentVersionNum?: string | null): Promise<void> {
     const response = await reviewService.listReviewFeedbacks(lensId);
     if (response.success) {
@@ -662,6 +795,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 从镜头详情跳转到导演审片页或制片任务页 */
   async function handleOpenReviewTaskFromLens(taskId: string): Promise<void> {
     if (currentRole !== 'director' && currentRole !== 'producer') {
       setResult({ success: false, error: '当前角色没有任务级审片入口。' });
@@ -685,6 +819,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     onNavigate?.(taskVisibleToDirector ? 'review' : 'producer-review');
   }
 
+  /** 更新镜头二级审片状态（待提审/已按反馈修改/内部通过等），操作前弹窗确认 */
   async function updateInternalReviewStatus(lensId: string, targetStatusCode: InternalReviewStatusCode): Promise<void> {
     if (!canUseInternalReviewActions) {
       setResult({ success: false, error: '当前角色无权操作二级状态。' });
@@ -724,14 +859,17 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
 
 
+  /* ========== 监听工作区变更，自动刷新镜头列表 ========== */
   useEffect(() => {
     void refreshLenses();
   }, [workspaceActiveEpisodeId, workspaceActiveProjectId]);
 
+  /** 当镜头列表更新时，清除已不存在的镜头选中状态 */
   useEffect(() => {
     setSelectedLensIds((current) => current.filter((lensId) => lenses.some((lens) => lens.lensId === lensId)));
   }, [lenses]);
 
+  /** 弹窗打开时锁定 body 滚动，并监听 Escape 键关闭弹窗 */
   useEffect(() => {
     const hasModalOpen = Boolean(activeDetail || editorDialog || reworkDialog || reworkRecordEditor || previewingReworkAttachment);
     if (!hasModalOpen) {
@@ -785,6 +923,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     };
   }, [activeDetail, editorDialog, reworkDialog, reworkRecordEditor, previewingReworkAttachment]);
 
+  /** 窗口大小变化时自动调整详情弹窗尺寸 */
   useEffect(() => {
     if (!activeDetail || !detailModalSize) {
       return;
@@ -804,6 +943,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return () => window.removeEventListener('resize', handleWindowResize);
   }, [activeDetail, detailModalSize, isDetailModalMaximized]);
 
+  /** 鼠标拖拽调整详情弹窗大小 */
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       const resizeState = detailResizeRef.current;
@@ -828,7 +968,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     };
   }, []);
 
-  // Load draft tasks for producer batch operations
+  /** 制片角色：加载草稿审片任务列表，用于批量将镜头加入/移出草稿任务 */
   useEffect(() => {
     if (!isProducer || !workspaceActiveProjectId) return;
     let cancelled = false;
@@ -841,6 +981,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return () => { cancelled = true; };
   }, [isProducer, workspaceActiveProjectId]);
 
+  /** 批量将已选镜头加入某个草稿审片任务 */
   async function handleBatchAddToDraft(): Promise<void> {
     if (selectedLensIds.length === 0 || draftTasks.length === 0) return;
     const taskNames = draftTasks.map((t, i) => `${i + 1}. ${t.taskName || t.taskId.slice(0, 8)}`).join('\n');
@@ -860,6 +1001,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 批量将已选镜头从所有草稿审片任务中移除 */
   async function handleBatchRemoveFromDraft(): Promise<void> {
     if (selectedLensIds.length === 0 || draftTasks.length === 0) return;
     const selectedSet = new Set(selectedLensIds);
@@ -878,6 +1020,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await refreshLenses();
   }
 
+  /** 远程数据源时从 API 加载项目成员列表 */
   useEffect(() => {
     const projectCode = workspaceActiveProjectId ?? '';
     if (dataSource !== 'remote' || !projectCode) {
@@ -908,9 +1051,11 @@ export function LensPage({ onNavigate }: LensPageProps) {
     };
   }, [dataSource, setCurrentProjectMembers, workspaceActiveProjectId]);
 
+  /* ========== 统计数据 ========== */
   const totalFrames = useMemo(() => lenses.reduce((sum, lens) => sum + lens.singleFrame, 0), [lenses]);
   const makerOptions = useMemo(() => [...new Set(lenses.map((lens) => getLensMakerDisplayText(lens, currentProjectMembers)).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'zh-CN')), [currentProjectMembers, lenses]);
   const selectedLensIdSet = useMemo(() => new Set(selectedLensIds), [selectedLensIds]);
+  /** 检查是否有任意交叉筛选条件处于激活状态 */
   const hasActiveCrossFilter = Boolean(
     searchKeyword.trim()
     || statusFilter !== 'all'
@@ -925,6 +1070,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     || recentStartDate
     || recentEndDate,
   );
+  /** 交叉筛选作用域：有选中且有关键筛选时才缩小范围，否则使用全量 */
   const scopedLenses = useMemo(() => {
     if (selectedLensIdSet.size === 0 || !hasActiveCrossFilter) {
       return lenses;
@@ -933,6 +1079,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return lenses.filter((lens) => selectedLensIdSet.has(lens.lensId));
   }, [hasActiveCrossFilter, lenses, selectedLensIdSet]);
 
+  /** 根据所有筛选条件过滤并排序镜头列表 */
   const filteredLenses = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
 
@@ -963,6 +1110,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return matched.sort((left, right) => compareLenses(left, right, sortField, sortDirection));
   }, [currentProjectMembers, makerFilter, missingItemFilter, problemTypeFilter, readinessFilter, recentActionFilter, recentEndDate, recentStartDate, recentTimeRangeFilter, scopedLenses, searchKeyword, showClosedLenses, sortDirection, sortField, statusFilter]);
 
+  /* ========== 筛选结果的统计衍生数据 ========== */
   const filteredIssueLenses = useMemo(() => filteredLenses.filter(hasAnyLensIssue), [filteredLenses]);
   const filteredFrameCount = useMemo(() => filteredLenses.reduce((sum, lens) => sum + lens.singleFrame, 0), [filteredLenses]);
   const filteredMakingCount = useMemo(() => filteredLenses.filter((lens) => lens.lensStatus === '制作').length, [filteredLenses]);
@@ -972,13 +1120,16 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const filteredClosedCount = useMemo(() => filteredLenses.filter((lens) => lens.lensStatus === '关闭').length, [filteredLenses]);
   const filteredFrameRatio = totalFrames > 0 ? filteredFrameCount / totalFrames : 0;
 
+  /* ========== 选中项统计 ========== */
   const selectedCount = selectedLensIds.length;
   const selectedFrameCount = useMemo(
     () => lenses.filter((lens) => selectedLensIdSet.has(lens.lensId)).reduce((sum, lens) => sum + lens.singleFrame, 0),
     [lenses, selectedLensIdSet],
   );
 
+  /* ========== 详情弹窗搜索 ========== */
   const detailKeyword = detailSearch.trim().toLowerCase();
+  /** 在详情弹窗中，根据关键词筛选版本资产列表 */
   const filteredDetailVersions = useMemo(() => {
     if (!activeDetail) {
       return [];
@@ -996,6 +1147,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     ));
   }, [activeDetail, detailKeyword]);
 
+  /** 在详情弹窗中，根据关键词筛选生命周期记录 */
   const filteredDetailHistory = useMemo(() => {
     if (!activeDetail) {
       return [];
@@ -1018,6 +1170,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     ));
   }, [activeDetail, detailKeyword]);
 
+  /** 当前详情中与镜头当前版本匹配的版本数据 */
   const currentDetailVersion = useMemo(() => {
     if (!activeDetail) {
       return null;
@@ -1026,27 +1179,34 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return activeDetail.versions.find((version) => version.versionNum === activeDetail.lens.versionNum) ?? activeDetail.versions[0] ?? null;
   }, [activeDetail]);
 
+  /** 当前版本已绑定的 MOV（拍屏视频）绑定 */
   const currentMovBinding = useMemo(() => currentDetailVersion?.bindings.find((binding) => binding.fileType === 'mov') ?? null, [currentDetailVersion]);
+  /** 当前版本的 MOV 匹配调试信息 */
   const currentMovDebug = useMemo(() => currentDetailVersion?.matchDebug.mov ?? null, [currentDetailVersion]);
+  /** 当前采用的 Layout 候选（优先 isSelected，否则取第一个） */
   const selectedLayoutCandidate = useMemo(
     () => activeDetail?.layoutCandidates.find((candidate) => candidate.isSelected) ?? activeDetail?.layoutCandidates[0] ?? null,
     [activeDetail],
   );
+  /** 当前导演反馈列表 */
   const currentDirectorFeedbacks = useMemo(() => {
     return directorFeedbackView?.feedbacks ?? [];
   }, [directorFeedbackView]);
 
+  /** 当前导演反馈轮的绘制时间线/帧列表 */
   const currentDirectorFeedbackRoundTimeline = useMemo(
     () => directorFeedbackView?.latestRoundDrawingTimeline ?? directorFeedbackView?.latestRoundDrawingFrames ?? [],
     [directorFeedbackView],
   );
 
+  /** 当前处于活动状态的项目对象 */
   const currentProject = useMemo(
     () => (workspaceActiveProjectId ? projects.find((project) => project.projectId === workspaceActiveProjectId) ?? null : null),
     [projects, workspaceActiveProjectId],
   );
   const playbackFps = useMemo(() => resolveProjectPlaybackFps(currentProject), [currentProject]);
 
+  /** 导演反馈回放源：解析版本视频或 Layout 视频的可播放地址 */
   const directorFeedbackPlaybackSource = useMemo(() => {
     if (!activeDetail) {
       return null;
@@ -1064,6 +1224,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }, activeDetail);
     }, [activeDetail, currentDirectorFeedbacks.length]);
 
+  /** 导演反馈回放源的提示文案，告知用户当前使用哪种视频源 */
   const directorFeedbackPlaybackNotice = useMemo(() => {
     if (!directorFeedbackPlaybackSource) {
       return '当前镜头没有可回放素材。';
@@ -1084,14 +1245,17 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return '当前使用版本视频回放。';
   }, [directorFeedbackPlaybackSource]);
 
+  /** 点击导演反馈卡片时，定位到该反馈对应的帧 */
   function handleDirectorFeedbackCardClick(feedback: import('../types/review').ReviewFeedback): void {
     const frameNumber = feedback.frameNumber ?? 1;
     directorFeedbackSeekRequestRef.current += 1;
     setDirectorFeedbackSeekTarget({ frameNumber, requestId: directorFeedbackSeekRequestRef.current });
   }
 
+  /** 是否有正在生成预览代理的视频 */
   const hasPendingPreviewProxy = Boolean(currentMovBinding?.mediaPreviewMode === 'pending' || activeDetail?.lens.layoutVideoPreviewMode === 'pending');
 
+  /** 镜头切换时重置预览错误与加载状态 */
   useEffect(() => {
     setPreviewErrors({});
     setPreviewLoadStates({
@@ -1100,6 +1264,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }, [activeDetail?.lens.lensId, currentMovBinding?.mediaPreviewUrl, activeDetail?.lens.layoutVideoPreviewUrl]);
 
+  /** 有正在生成预览代理时，定时轮询刷新详情以获取最新预览 URL */
   useEffect(() => {
     if (!activeDetail || !hasPendingPreviewProxy) {
       return;
@@ -1114,6 +1279,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     };
   }, [activeDetail, hasPendingPreviewProxy]);
 
+  /** 详情弹窗中每步建议列表：基于当前版本/Layout/视频状态自动生成 */
   const detailRecommendations = useMemo(() => {
     if (!activeDetail) {
       return [] as string[];
@@ -1139,7 +1305,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
     return recommendations;
   }, [activeDetail, currentMovBinding]);
+  /** 是否同时拥有制作视频和 Layout 视频预览 */
   const hasDualPreview = Boolean(currentMovBinding?.mediaPreviewUrl && activeDetail?.lens.layoutVideoPreviewUrl);
+  /** 根据详情弹窗宽度计算 css class，窄/紧凑/标准三种布局 */
   const detailModalClassName = useMemo(() => {
     const width = detailModalSize?.width ?? getDefaultDetailModalSize().width;
     const baseClassName = isDetailModalMaximized ? 'lens-detail-modal panel stack-gap is-maximized' : 'lens-detail-modal panel stack-gap';
@@ -1153,6 +1321,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return baseClassName;
   }, [detailModalSize, isDetailModalMaximized]);
 
+  /** 设置或清除某个视频预览目标的错误信息 */
   function setPreviewError(target: PreviewTarget, message?: string): void {
     setPreviewErrors((current) => {
       if (!message) {
@@ -1176,6 +1345,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 视频播放出错时的处理：更新加载状态并设置错误详情 */
   function handleVideoPreviewError(target: PreviewTarget, event: React.SyntheticEvent<HTMLVideoElement>): void {
     setPreviewLoadStates((current) => ({ ...current, [target]: false }));
     const mediaError = event.currentTarget.error;
@@ -1183,15 +1353,18 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setPreviewError(target, `${getVideoElementErrorMessage(mediaError)}（code: ${detail}）`);
   }
 
+  /** 视频加载完成后的处理 */
   function handleVideoPreviewLoaded(target: PreviewTarget): void {
     setPreviewLoadStates((current) => ({ ...current, [target]: false }));
     setPreviewError(target);
   }
 
+  /** 视频开始加载时的处理 */
   function handleVideoPreviewLoadStart(target: PreviewTarget): void {
     setPreviewLoadStates((current) => ({ ...current, [target]: true }));
   }
 
+  /** 播放单个视频预览 */
   function handlePlaySinglePreview(target: PreviewTarget): void {
     const video = target === 'production' ? productionVideoRef.current : layoutVideoRef.current;
     if (!video) {
@@ -1205,11 +1378,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 暂停单个视频预览 */
   function handlePauseSinglePreview(target: 'production' | 'layout'): void {
     const video = target === 'production' ? productionVideoRef.current : layoutVideoRef.current;
     video?.pause();
   }
 
+  /** 同时从同步起点播放制作视频和 Layout 视频 */
   function handlePlayBothPreviews(): void {
     const primary = productionVideoRef.current;
     const layout = layoutVideoRef.current;
@@ -1227,11 +1402,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 同时暂停两个视频预览 */
   function handlePauseBothPreviews(): void {
     productionVideoRef.current?.pause();
     layoutVideoRef.current?.pause();
   }
 
+  /** 重置两个视频到开头 */
   function handleResetBothPreviews(): void {
     [productionVideoRef.current, layoutVideoRef.current].forEach((video) => {
       if (!video) {
@@ -1242,6 +1419,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 开始鼠标拖拽调整详情弹窗大小 */
   function handleStartDetailResize(event: React.MouseEvent<HTMLDivElement>): void {
     event.preventDefault();
     event.stopPropagation();
@@ -1256,6 +1434,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     };
   }
 
+  /** 切换详情弹窗的最大化/还原状态 */
   function toggleDetailModalMaximize(): void {
     if (isDetailModalMaximized) {
       setDetailModalSize(getDefaultDetailModalSize());
@@ -1267,6 +1446,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setIsDetailModalMaximized(true);
   }
 
+  /** 将镜头数据填充到编辑表单中（用于编辑模式） */
   function fillForm(lens: LensRecord): void {
     const makerMatchStatus = getLensMakerMatchStatus(lens);
     const makerNameRaw = lens.makerNameRaw?.trim() || (makerMatchStatus !== 'matched' ? lens.maker?.trim() : '');
@@ -1284,32 +1464,38 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 打开创建镜头弹窗 */
   function openCreateDialog(): void {
     if (denyLensWrite()) return;
     resetForm();
     setEditorDialog({ mode: 'create' });
   }
 
+  /** 打开编辑镜头弹窗，并填充当前数据 */
   function openEditDialog(lens: LensRecord): void {
     if (denyLensWrite()) return;
     fillForm(lens);
     setEditorDialog({ mode: 'edit', lensId: lens.lensId });
   }
 
+  /** 关闭编辑器弹窗并重置表单 */
   function closeEditorDialog(): void {
     resetForm();
     setEditorDialog(null);
   }
 
+  /** 重置表单到默认值 */
   function resetForm(): void {
     setEditingLensId(null);
     setForm(defaultForm);
   }
 
+  /** 切换单行镜头的选中/取消状态 */
   function toggleLensSelection(lensId: string): void {
     setSelectedLensIds((current) => (current.includes(lensId) ? current.filter((item) => item !== lensId) : [...current, lensId]));
   }
 
+  /** 切换全选/全不选当前可见镜头 */
   function toggleSelectAllVisible(): void {
     const visibleIds = filteredLenses.map((lens) => lens.lensId);
     const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((lensId) => selectedLensIds.includes(lensId));
@@ -1321,6 +1507,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setSelectedLensIds((current) => [...new Set([...current, ...visibleIds])]);
   }
 
+  /** 提交镜头创建或编辑表单 */
   async function handleSubmit(): Promise<void> {
     if (denyLensWrite()) return;
     const editingLens = editingLensId ? lenses.find((lens) => lens.lensId === editingLensId) : null;
@@ -1361,6 +1548,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 删除单个镜头（确认后执行） */
   async function handleDelete(lensId: string): Promise<void> {
     if (denyLensWrite()) return;
     const lens = lenses.find((item) => item.lensId === lensId);
@@ -1382,6 +1570,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 对单个镜头执行本地文件检查 */
   async function handleSingleLensCheck(lensId: string): Promise<void> {
     const response = await window.movtools.fileCheck.scanLens({ lensId });
     setResult(response);
@@ -1393,6 +1582,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 检查当前采用 Layout 的引用完整性 */
   async function handleSingleLensLayoutReferenceCheck(lensId: string): Promise<void> {
     const response = await window.movtools.fileCheck.scanLensLayoutReferences({ lensId });
     setResult(response);
@@ -1420,6 +1610,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await refreshActiveDetail({ silent: true });
   }
 
+  /** 自动刷新指定镜头的文件绑定（优先用本地缓存，必要时请求服务端详情） */
   async function autoRefreshLensBindings(lensIds: string[]): Promise<{ success: boolean; error?: string }> {
     const lensById = new Map(lenses.map((lens) => [lens.lensId, lens] as const));
     if (activeDetail?.lens.lensId) {
@@ -1436,6 +1627,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 制作人员角色：在本地执行镜头文件绑定刷新与 Layout 扫描 */
   async function refreshLocalLensBindings(lensIds: string[]): Promise<{ success: boolean; error?: string }> {
     const refreshResponse = await window.movtools.fileCheck.refreshLensBindings({ lensIds });
     if (!refreshResponse.success) {
@@ -1450,6 +1642,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return { success: true };
   }
 
+  /** 自动对指定镜头执行 Layout 引用排查 */
   async function autoRefreshLayoutReferences(lensId: string): Promise<{ success: boolean; error?: string }> {
     const response = await window.movtools.fileCheck.scanLensLayoutReferences({ lensId });
     if (response.success) {
@@ -1459,6 +1652,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     return { success: false, error: response.error ?? '自动 layout 引用排查失败。' };
   }
 
+  /** 更新单个镜头的生命周期状态（提交/通过/返修/关闭），成功后自动刷新文件匹配 */
   async function handleStatusChange(lensId: string, action: LensStatusAction, note?: string, imagePaths?: string[]): Promise<void> {
     if (denyLensWrite()) return;
     if (pendingStatusLensId === lensId) {
@@ -1466,7 +1660,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
 
     if (action === 'submit') {
-      const confirmed = window.confirm('确认要提交该镜头吗？提交后将进入“提交”状态。');
+      const confirmed = window.confirm('确认要提交该镜头吗？提交后将进入"提交"状态。');
       if (!confirmed) {
         return;
       }
@@ -1491,6 +1685,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 批量更新多个镜头的生命周期状态，二次确认后执行 */
   async function handleBatchStatusChange(action: LensStatusAction, note?: string, imagePaths?: string[]): Promise<void> {
     if (denyLensWrite()) return;
     if (selectedLensIds.length === 0) {
@@ -1505,7 +1700,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
         : action === 'rework'
           ? '批量返修'
           : '批量关闭';
-    const confirmed = window.confirm(`将对 ${selectedLensIds.length} 条镜头执行“${actionLabel}”。\n\n是否继续？`);
+    const confirmed = window.confirm(`将对 ${selectedLensIds.length} 条镜头执行"${actionLabel}"。\n\n是否继续？`);
     if (!confirmed) {
       return;
     }
@@ -1526,11 +1721,14 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /* ========== 返修弹窗操作 ========== */
+  /** 打开单镜头返修弹窗 */
   function openSingleReworkDialog(lens: LensRecord): void {
     setReworkNote('');
     setReworkDialog({ mode: 'single', lensId: lens.lensId, lensName: lens.lensName || lens.lensCode, imagePaths: [] });
   }
 
+  /** 打开批量返修弹窗 */
   function openBatchReworkDialog(): void {
     if (selectedLensIds.length === 0) {
       setResult({ success: false, error: '请先选择要批量处理的镜头。' });
@@ -1541,11 +1739,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setReworkDialog({ mode: 'batch', lensCount: selectedLensIds.length, imagePaths: [] });
   }
 
+  /** 关闭返修弹窗 */
   function closeReworkDialog(): void {
     setReworkDialog(null);
     setReworkNote('');
   }
 
+  /** 选择返修弹窗的待插入图片 */
   async function handlePickReworkDialogImages(): Promise<void> {
     if (!reworkDialog) {
       return;
@@ -1562,10 +1762,12 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 从剪贴板事件提取图片路径 */
   async function extractPastedImagePaths(event: ReactClipboardEvent<HTMLElement>): Promise<string[]> {
     return extractPastedImages(event.clipboardData.items);
   }
 
+  /** 处理返修弹窗中的粘贴图片事件 */
   async function handlePasteReworkDialogImages(event: ReactClipboardEvent<HTMLElement>): Promise<void> {
     if (!reworkDialog) {
       return;
@@ -1582,6 +1784,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 从返修弹窗中移除某张待插入图片 */
   function removeReworkDialogImage(filePath: string): void {
     const confirmed = window.confirm(`确认移除待插入图片「${getBaseName(filePath)}」吗？`);
     if (!confirmed) {
@@ -1594,6 +1797,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 在返修弹窗中上移/下移某张图片 */
   function moveReworkDialogImage(filePath: string, direction: 'up' | 'down'): void {
     setReworkDialog((current) => {
       if (!current) {
@@ -1617,6 +1821,8 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /* ========== 返修记录编辑器操作 ========== */
+  /** 打开指定历史事件的返修记录编辑器 */
   function openReworkRecordEditor(event: LensLifecycleEvent): void {
     setReworkRecordEditor({
       lensId: event.lensId,
@@ -1629,6 +1835,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 关闭返修记录编辑器 */
   function closeReworkRecordEditor(): void {
     if (isSavingReworkRecord) {
       return;
@@ -1637,6 +1844,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setReworkRecordEditor(null);
   }
 
+  /** 打开返修附件预览弹窗 */
   function openReworkAttachmentPreview(attachments: LensLifecycleAttachment[], attachmentId: string): void {
     const activeIndex = attachments.findIndex((attachment) => attachment.attachmentId === attachmentId);
     if (activeIndex === -1) {
@@ -1646,10 +1854,12 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setPreviewingReworkAttachment({ attachments, activeIndex });
   }
 
+  /** 关闭返修附件预览弹窗 */
   function closeReworkAttachmentPreview(): void {
     setPreviewingReworkAttachment(null);
   }
 
+  /** 在附件预览中切换到上一张/下一张 */
   function movePreviewingReworkAttachment(direction: 'prev' | 'next'): void {
     setPreviewingReworkAttachment((current) => {
       if (!current || current.attachments.length <= 1) {
@@ -1662,6 +1872,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 选择返修记录编辑器中新增的本地图片 */
   async function handlePickReworkRecordImages(): Promise<void> {
     if (!reworkRecordEditor) {
       return;
@@ -1678,6 +1889,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 处理返修记录编辑器中的粘贴图片事件 */
   async function handlePasteReworkRecordImages(event: ReactClipboardEvent<HTMLElement>): Promise<void> {
     if (!reworkRecordEditor) {
       return;
@@ -1694,6 +1906,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 切换某张已保存附件在保存后的保留/移除状态 */
   function toggleReworkAttachment(attachmentId: string): void {
     setReworkRecordEditor((current) => {
       if (!current) {
@@ -1716,6 +1929,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 从返修记录编辑器中移除某张待插入的本地图片 */
   function removePendingReworkImage(filePath: string): void {
     const confirmed = window.confirm(`确认移除待插入图片「${getBaseName(filePath)}」吗？`);
     if (!confirmed) {
@@ -1728,6 +1942,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     } : current);
   }
 
+  /** 在已保存附件列表中上移/下移某张附件 */
   function moveSavedReworkAttachment(attachmentId: string, direction: 'up' | 'down'): void {
     setReworkRecordEditor((current) => {
       if (!current) {
@@ -1754,6 +1969,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 在待插入图片列表中上移/下移某张图片 */
   function movePendingReworkImage(filePath: string, direction: 'up' | 'down'): void {
     setReworkRecordEditor((current) => {
       if (!current) {
@@ -1777,6 +1993,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     });
   }
 
+  /** 保存返修记录编辑器的修改 */
   async function submitReworkRecordEditor(): Promise<void> {
     if (!reworkRecordEditor || isSavingReworkRecord) {
       return;
@@ -1801,6 +2018,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 提交返修弹窗（单镜头调用状态变更，批量调用批量状态变更） */
   async function submitReworkDialog(): Promise<void> {
     if (!reworkDialog) {
       return;
@@ -1817,6 +2035,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     closeReworkDialog();
   }
 
+  /** 批量删除已选镜头（二次确认后执行） */
   async function handleBatchDelete(): Promise<void> {
     if (selectedLensIds.length === 0) {
       setResult({ success: false, error: '请先选择要删除的镜头。' });
@@ -1847,6 +2066,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 关闭镜头（确认后将其标记为关闭状态） */
   async function handleCloseLens(lens: LensRecord): Promise<void> {
     const confirmed = window.confirm(`关闭后镜头会保留在系统中，但默认不会显示在镜头列表。\n\n镜头：${lens.lensName || lens.lensCode}\n\n是否继续？`);
     if (!confirmed) {
@@ -1856,6 +2076,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await handleStatusChange(lens.lensId, 'close');
   }
 
+  /** 全量刷新镜头文件绑定：制作角色走本地，其他角色走服务端 */
   async function handleBatchRefreshBindings(): Promise<void> {
     if (lenses.length === 0) {
       setResult({ success: false, error: '当前没有可刷新的镜头。' });
@@ -1887,6 +2108,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 从 Excel 文件导入镜头 */
   async function handleImport(): Promise<void> {
     if (denyLensWrite()) return;
     const filePath = await window.movtools.dialog.pickFile({
@@ -1904,6 +2126,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  /** 导出筛选结果中的缺项镜头为 Excel 报告 */
   async function handleExportIssueReport(): Promise<void> {
     if (denyLensWrite()) return;
     if (filteredIssueLenses.length === 0) {
@@ -1920,6 +2143,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     window.alert(response.success ? `缺项表已导出：${response.filePath}` : response.error ?? '导出缺项表失败。');
   }
 
+  /** 手动为当前版本绑定 MA 或 MOV 文件 */
   async function handleBindDetailFile(fileType: BindFileType): Promise<void> {
     if (!activeDetail) {
       return;
@@ -1989,6 +2213,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await refreshActiveDetail();
   }
 
+  /** 在资源管理器中打开已绑定的本地文件 */
   async function handleOpenBoundFile(binding: LensVersionBinding): Promise<void> {
     if (getDataSource() === 'remote') {
       const sourceRoot = binding.sourceRoot?.trim() || getDefaultSourceRoot(binding.fileType);
@@ -2007,6 +2232,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setResult(response);
   }
 
+  /** 选择某个 Layout 候选作为当前采用项 */
   async function handleSelectLayoutCandidate(lensCode: string, candidateId: string): Promise<void> {
     const response = await window.movtools.fileCheck.selectLayoutCandidate({ lensCode, candidateId });
     if (response.success) {
@@ -2017,6 +2243,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setResult(response);
   }
 
+  /** 为镜头补充新的 Layout Maya 候选文件 */
   async function handleAddLayoutCandidate(lensCode: string): Promise<void> {
     const filePath = await window.movtools.dialog.pickFile({
       title: '选择Layout Maya 文件',
@@ -2035,6 +2262,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setResult(response);
   }
 
+  /** 为 Layout 候选手动绑定视频文件（若未指定候选 ID 则先补充 Maya） */
   async function handleAddLayoutVideoBinding(lensCode: string, candidateId?: string): Promise<void> {
     if (!activeDetail) {
       return;
@@ -2095,6 +2323,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setResult(response);
   }
 
+  /** Layout 变更后刷新文件绑定和引用排查，并更新列表与详情 */
   async function refreshStateAfterLayoutChange(baseResponse?: { success: boolean; error?: string }): Promise<void> {
     if (activeDetail) {
       const [bindingRefresh, referenceRefresh] = await Promise.all([
@@ -2117,9 +2346,15 @@ export function LensPage({ onNavigate }: LensPageProps) {
   }
 
   const allVisibleSelected = filteredLenses.length > 0 && filteredLenses.every((lens) => selectedLensIds.includes(lens.lensId));
+  const debugLens = filteredLenses.find((lens) => lens.internalReviewStatusCode === 'PENDING_FEEDBACK_FIX') ?? filteredLenses[0] ?? null;
+  const headerDebugText = debugLens
+    ? `调试：role=${currentRole}；lens=${debugLens.lensCode}；status=${debugLens.internalReviewStatusCode ?? 'null'}；canFix=${String(canMarkFixUpdated(currentRole, debugLens.internalReviewStatusCode))}`
+    : `调试：role=${currentRole}；当前筛选结果中没有镜头可用于按钮判断`;
 
+  /* ======================== JSX 渲染 ======================== */
   return (
     <section className="page-layout">
+      {/* 页面头部：标题、描述、项目/集信息 */}
       <header className="page-header lens-page-header">
         <div>
           <p className="eyebrow">镜头</p>
@@ -2129,12 +2364,16 @@ export function LensPage({ onNavigate }: LensPageProps) {
             <span className="page-header-tag">文件绑定</span>
             <span className="page-header-tag">Layout协作</span>
           </div>
-        </div>
-        <div className="page-header-actions lens-header-actions">
-          <p className="muted">当前项目：{activeProjectName || '未选择项目'}；当前集：{activeEpisodeCode ? `${activeEpisodeCode} / ${activeEpisodeName || activeEpisodeCode}` : '未选择集'}。现已按“制作 / 提交 / 返修 / 通过 / 关闭”生命周期管理当前集镜头。</p>
-        </div>
-      </header>
+          </div>
+          <div className="page-header-actions lens-header-actions">
+            <div className="stack-gap" style={{ gap: '0.25rem' }}>
+              <p className="muted">当前项目：{activeProjectName || '未选择项目'}；当前集：{activeEpisodeCode ? `${activeEpisodeCode} / ${activeEpisodeName || activeEpisodeCode}` : '未选择集'}。</p>
+              <p className="muted">{headerDebugText}</p>
+            </div>
+          </div>
+        </header>
 
+      {/* 统计卡片区域：镜头数 / 帧数 / 状态分布 */}
       <div className="lens-summary-grid">
         <article className="lens-summary-card">
           <span className="lens-summary-label">当前镜头数</span>
@@ -2149,6 +2388,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
           <small className="muted">全项目 {totalFrames} 帧（{formatFrameDuration(totalFrames)}） · 已选 {selectedFrameCount} 帧 / {formatFrameDuration(selectedFrameCount)}</small>
         </article>
         <article className="lens-summary-card lens-summary-split">
+          {/* 各状态计数 */}
           <div><span className="lens-summary-label">制作</span><strong>{filteredMakingCount}</strong></div>
           <div><span className="lens-summary-label">提交</span><strong>{filteredSubmittedCount}</strong></div>
           <div><span className="lens-summary-label">返修</span><strong>{filteredReworkCount}</strong></div>
@@ -2309,83 +2549,89 @@ export function LensPage({ onNavigate }: LensPageProps) {
             </label>
           </div>
 
-            <div className="lens-column-settings panel stack-gap">
-                <div className="section-heading">
-                  <div>
-                    <h4>列表列显示</h4>
-                    <p className="muted">可单独控制镜头列表列的显示状态，并可本机保存；默认折叠。</p>
-                  </div>
-                  <div className="actions-row compact-actions wrap-actions">
-                    <button className="secondary-button" onClick={toggleColumnSettings} type="button">
-                      {isColumnSettingsCollapsed ? '展开设置' : '折叠设置'}
-                    </button>
-                    <button className="secondary-button" onClick={resetLensColumns} type="button">恢复默认</button>
-                  </div>
-                </div>
-              {!isColumnSettingsCollapsed ? (
-                <div className="lens-column-toggle-grid">
-                  {LENS_COLUMN_ORDER.map((column) => (
-                    <label className="checkbox-field" key={column}>
-                      <input checked={visibleColumns[column]} disabled={(column === 'lensCode' || column === 'lensStatus') && !visibleColumns[column]} onChange={(event) => updateLensColumn(column, event.target.checked)} type="checkbox" />
-                      <span>{LENS_COLUMN_LABELS[column]}</span>
-                    </label>
-                  ))}
-                </div>
+        {/* 列显隐设置面板 */}
+        <div className="lens-column-settings panel stack-gap">
+          <div className="section-heading">
+            <div>
+              <h4>列表列显示</h4>
+              <p className="muted">可单独控制镜头列表列的显示状态，并可本机保存；默认折叠。</p>
+            </div>
+            <div className="actions-row compact-actions wrap-actions">
+              <button className="secondary-button" onClick={toggleColumnSettings} type="button">
+                {isColumnSettingsCollapsed ? '展开设置' : '折叠设置'}
+              </button>
+              <button className="secondary-button" onClick={resetLensColumns} type="button">恢复默认</button>
+            </div>
+          </div>
+          {/* 列显隐复选框网格 */}
+          {!isColumnSettingsCollapsed ? (
+            <div className="lens-column-toggle-grid">
+              {LENS_COLUMN_ORDER.map((column) => (
+                <label className="checkbox-field" key={column}>
+                  <input checked={visibleColumns[column]} disabled={(column === 'lensCode' || column === 'lensStatus') && !visibleColumns[column]} onChange={(event) => updateLensColumn(column, event.target.checked)} type="checkbox" />
+                  <span>{LENS_COLUMN_LABELS[column]}</span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {/* 批量操作工具栏 */}
+        <div className="lens-bulk-actions lens-bulk-actions-grid lens-bulk-zone">
+          {/* 常规功能组：刷新/文件匹配/导出/新增/导入 */}
+          <div className="lens-bulk-group lens-bulk-group--utility">
+            <div className="lens-bulk-group-heading">
+              <strong>常规功能</strong>
+              <small className="muted">新增、导入、导出与列表刷新。</small>
+            </div>
+            <div className="lens-bulk-group-buttons lens-bulk-group-buttons--utility">
+              <button className="secondary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId || isLoading} onClick={() => void refreshLenses()} type="button">
+                {isLoading ? '刷新中…' : '刷新列表'}
+              </button>
+              {canUseLocalFileChecks ? (
+                <button className="secondary-button lens-feedback-button" disabled={lenses.length === 0 || pendingBatchAction !== null} onClick={() => void handleBatchRefreshBindings()} type="button">
+                  {pendingBatchAction === 'refresh' ? '全量刷新中…' : isProducer ? `刷新全部文件匹配并同步服务器（${lenses.length}）` : `刷新全部文件匹配（${lenses.length}）`}
+                </button>
+              ) : null}
+              <button className="secondary-button lens-feedback-button" disabled={filteredIssueLenses.length === 0} onClick={() => void handleExportIssueReport()} type="button">
+                导出缺项 Excel（{filteredIssueLenses.length}）
+              </button>
+              {canModifyLensList ? (
+                <>
+                  <button className="primary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={openCreateDialog} type="button">
+                    新增镜头
+                  </button>
+                  <button className="secondary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={() => void handleImport()} type="button">
+                    Excel 批量导入
+                  </button>
+                </>
               ) : null}
             </div>
+          </div>
 
-            <div className="lens-bulk-actions lens-bulk-actions-grid lens-bulk-zone">
+          {/* 制片专属：审片任务批量操作 */}
+          {isProducer ? (
             <div className="lens-bulk-group lens-bulk-group--utility">
               <div className="lens-bulk-group-heading">
-                <strong>常规功能</strong>
-                <small className="muted">新增、导入、导出与列表刷新。</small>
+                <strong>审片任务批量操作</strong>
+                <small className="muted">将已选镜头加入审片任务或从草稿任务中移除。</small>
               </div>
               <div className="lens-bulk-group-buttons lens-bulk-group-buttons--utility">
-                <button className="secondary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId || isLoading} onClick={() => void refreshLenses()} type="button">
-                  {isLoading ? '刷新中…' : '刷新列表'}
+                <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0} onClick={() => onNavigate?.('producer-review')} type="button">
+                  加入新任务（{selectedCount}）
                 </button>
-                {canUseLocalFileChecks ? (
-                  <button className="secondary-button lens-feedback-button" disabled={lenses.length === 0 || pendingBatchAction !== null} onClick={() => void handleBatchRefreshBindings()} type="button">
-                    {pendingBatchAction === 'refresh' ? '全量刷新中…' : isProducer ? `刷新全部文件匹配并同步服务器（${lenses.length}）` : `刷新全部文件匹配（${lenses.length}）`}
-                  </button>
-                ) : null}
-                <button className="secondary-button lens-feedback-button" disabled={filteredIssueLenses.length === 0} onClick={() => void handleExportIssueReport()} type="button">
-                  导出缺项 Excel（{filteredIssueLenses.length}）
+                <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0 || draftTasks.length === 0} onClick={() => void handleBatchAddToDraft()} type="button">
+                  加入草稿任务（{selectedCount}）
                 </button>
-                {canModifyLensList ? (
-                  <>
-                    <button className="primary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={openCreateDialog} type="button">
-                      新增镜头
-                    </button>
-                    <button className="secondary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={() => void handleImport()} type="button">
-                      Excel 批量导入
-                    </button>
-                  </>
-                ) : null}
+                <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0 || draftTasks.length === 0} onClick={() => void handleBatchRemoveFromDraft()} type="button">
+                  从草稿任务移除（{selectedCount}）
+                </button>
               </div>
             </div>
+          ) : null}
 
-            {isProducer ? (
-              <div className="lens-bulk-group lens-bulk-group--utility">
-                <div className="lens-bulk-group-heading">
-                  <strong>审片任务批量操作</strong>
-                  <small className="muted">将已选镜头加入审片任务或从草稿任务中移除。</small>
-                </div>
-                <div className="lens-bulk-group-buttons lens-bulk-group-buttons--utility">
-                  <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0} onClick={() => onNavigate?.('producer-review')} type="button">
-                    加入新任务（{selectedCount}）
-                  </button>
-                  <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0 || draftTasks.length === 0} onClick={() => void handleBatchAddToDraft()} type="button">
-                    加入草稿任务（{selectedCount}）
-                  </button>
-                  <button className="secondary-button lens-feedback-button" disabled={selectedCount === 0 || draftTasks.length === 0} onClick={() => void handleBatchRemoveFromDraft()} type="button">
-                    从草稿任务移除（{selectedCount}）
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {canModifyLensList ? (
+          {/* 高风险批量操作区：批量提交/通过/返修/关闭/删除 */}
+          {canModifyLensList ? (
             <div className="lens-bulk-group lens-bulk-group--danger">
               <div className="lens-bulk-group-heading">
                 <strong>⚠ 批量高风险操作区</strong>
@@ -2413,45 +2659,50 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 </button>
               </div>
             </div>
-            ) : null}
-          </div>
+          ) : null}
+        </div>
 
-          {filteredLenses.length > 0 ? (
-            <div className="lens-table-shell">
-              <table className="lens-table">
-                <thead>
-                  <tr>
-                    <th>
-                      <input checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} type="checkbox" />
-                    </th>
-                    {renderVisibleTableHeaders()}
-                    {canModifyLensList ? <th className="lens-table-actions-col">操作</th> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredLenses.map((lens) => {
-                    const isSelected = selectedLensIds.includes(lens.lensId);
-                    return (
-                      <tr className={isSelected ? 'is-selected' : ''} key={lens.lensId}>
-                        <td>
-                          <input checked={isSelected} onChange={() => toggleLensSelection(lens.lensId)} type="checkbox" />
-                        </td>
-                        {visibleLensColumns.map((column) => <td key={`${lens.lensId}-${column}`}>{renderVisibleTableCell(lens, column)}</td>)}
-                        {canModifyLensList ? <td className="lens-table-actions-col">{renderLensRowActions(lens)}</td> : null}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="lens-empty-state">
-              <p className="muted">当前筛选条件下没有镜头记录。</p>
-              <small className="muted">可以清空筛选、勾选“显示已关闭镜头”、手动创建镜头，或导入 Excel 批量创建。</small>
-            </div>
-          )}
+        {/* 镜头列表表格或空状态提示 */}
+        {filteredLenses.length > 0 ? (
+          <div className="lens-table-shell">
+            <table className="lens-table">
+              <thead>
+                <tr>
+                  <th>
+                    {/* 全选/取消全选复选框 */}
+                    <input checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} type="checkbox" />
+                  </th>
+                  {renderVisibleTableHeaders()}
+                  {canShowLensActions ? <th className="lens-table-actions-col">操作</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLenses.map((lens) => {
+                  const isSelected = selectedLensIds.includes(lens.lensId);
+                  return (
+                    <tr className={isSelected ? 'is-selected' : ''} key={lens.lensId}>
+                      <td>
+                        <input checked={isSelected} onChange={() => toggleLensSelection(lens.lensId)} type="checkbox" />
+                      </td>
+                      {/* 动态渲染可见列 */}
+                      {visibleLensColumns.map((column) => <td key={`${lens.lensId}-${column}`}>{renderVisibleTableCell(lens, column)}</td>)}
+                      {canShowLensActions ? <td className="lens-table-actions-col">{renderLensRowActions(lens)}</td> : null}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* 空状态提示 */
+          <div className="lens-empty-state">
+            <p className="muted">当前筛选条件下没有镜头记录。</p>
+            <small className="muted">可以清空筛选、勾选"显示已关闭镜头"、手动创建镜头，或导入 Excel 批量创建。</small>
+          </div>
+        )}
       </div>
 
+      {/* 镜头编辑器弹窗：创建或编辑镜头基本属性 */}
       {editorDialog ? (
         <div className="lens-detail-modal-overlay" onClick={closeEditorDialog} role="presentation">
           <div className="lens-editor-modal panel stack-gap lens-editor-dialog" onClick={(event) => event.stopPropagation()}>
@@ -2463,6 +2714,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               <button className="secondary-button" onClick={closeEditorDialog} type="button">关闭</button>
             </div>
 
+            {/* 镜头编辑表单：编号、名称、场次、帧数、制作人员、版本号、状态 */}
             <div className="form-grid lens-form-grid">
               <label className="field">
                 <span>镜头编号</span>
@@ -2534,6 +2786,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
         </div>
       ) : null}
 
+      {/* 镜头详情弹窗 */}
       {activeDetail ? (
         <div className="lens-detail-modal-overlay" onClick={closeActiveDetail} onWheel={(event) => event.stopPropagation()} role="presentation">
           <div
@@ -2542,6 +2795,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
             onWheel={(event) => event.stopPropagation()}
             style={detailModalSize ? { width: detailModalSize.width, height: detailModalSize.height } : undefined}
           >
+            {/* 详情弹窗头部：镜头编号、摘要信息、最大化/关闭按钮 */}
             <div className="section-heading">
               <div>
                 <h3>{activeDetail.lens.lensCode} · 镜头详情</h3>
@@ -2557,19 +2811,23 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </div>
             </div>
 
+            {/* 详情摘要卡片网格 */}
             <div className="lens-detail-summary-shell">
               <div className="lens-detail-summary-grid">
+                {/* 当前版本 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">当前版本</span>
                   <strong>{activeDetail.lens.versionNum}</strong>
                   <small className="muted">字段 {activeDetail.lens.versionTag} · {activeDetail.lens.fileName}</small>
                 </article>
+                {/* 二级审片状态 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">二级状态</span>
                   <strong className={internalReviewStatusClassName(activeDetail.lens.internalReviewStatusCode)}>{getInternalReviewStatusLabel(activeDetail.lens.internalReviewStatusCode, activeDetail.lens.internalReviewStatusName)}</strong>
                   <small className="muted">更新 {formatLensDateTime(activeDetail.lens.internalReviewUpdatedAtUtc || activeDetail.lens.updateTime)} · {activeDetail.lens.pendingDirectorFeedbackCount ?? 0} 条反馈</small>
                   {activeDetail.lens.latestDirectorFeedbackAtUtc ? <small className="muted">最近反馈 {formatLensDateTime(activeDetail.lens.latestDirectorFeedbackAtUtc)}</small> : null}
                 </article>
+                {/* 所属审片任务 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">所属审片任务</span>
                     {activeDetail.lens.latestReviewTaskId ? (
@@ -2588,6 +2846,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                     </>
                   )}
                 </article>
+                {/* 制作人信息 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">制作信息</span>
                   <strong>{getLensMakerDisplayText(activeDetail.lens, currentProjectMembers)}</strong>
@@ -2597,27 +2856,32 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   {activeDetail.lens.makerNameRaw ? <small className="muted">原始线索：{activeDetail.lens.makerNameRaw}</small> : null}
                   <small className="muted">场次 {activeDetail.lens.sceneNo || '—'} · {activeDetail.lens.singleFrame} 帧</small>
                 </article>
+                {/* 版本文件完整性 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">版本文件</span>
                   <strong>{getLensReminderHeadline(activeDetail.lens)}</strong>
                   <small className={getLensReminderTextClassName(activeDetail.lens)}>{getLensReminderTextLabel(activeDetail.lens)}</small>
                   {renderLensVersionMatchedFileNames(activeDetail.lens)}
                 </article>
+                {/* Layout 状态 */}
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">Layout</span>
                   <strong>{getLayoutSummaryHeadline(activeDetail.lens)}</strong>
                   <small className="muted">{getLayoutIssueTypeLabel(activeDetail.lens)}</small>
                 </article>
+                {/* 引用排查 */}
                 <article className="lens-summary-card lens-summary-card--compact">
                   <span className="lens-summary-label">引用排查</span>
                   <strong>{activeDetail.lens.layoutReferenceStatus}</strong>
                   <small className="muted">{activeDetail.lens.layoutReferenceIssueCount > 0 ? `问题 ${activeDetail.lens.layoutReferenceIssueCount} 项` : activeDetail.lens.layoutReferenceLastCheckTime || '尚未检查'}</small>
                 </article>
+                {/* 最近操作 */}
                 <article className="lens-summary-card lens-summary-card--compact">
                   <span className="lens-summary-label">最近操作</span>
                   <strong>{activeDetail.lens.recentStatusActionLabel || '暂无'}</strong>
                   <small className="muted">{formatLensDateTime(activeDetail.lens.recentStatusActionTime || activeDetail.lens.updateTime)}</small>
                 </article>
+                {/* 最近更新 */}
                 <article className="lens-summary-card lens-summary-card--compact">
                   <span className="lens-summary-label">最近更新</span>
                   <strong>{formatLensDateTime(activeDetail.lens.updateTime)}</strong>
@@ -2625,7 +2889,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 </article>
               </div>
 
+              {/* 建议与快捷操作区域 */}
               <div className="lens-detail-overview-grid">
+                {/* 下一步建议卡片 */}
                 <article className="lens-history-card lens-detail-quick-actions lens-detail-quick-actions--compact">
                   <div className="section-heading lens-version-header">
                     <div>
@@ -2640,6 +2906,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   </ul>
                 </article>
 
+                {/* 快捷操作按钮组 */}
                 <article className="lens-history-card lens-detail-quick-actions lens-detail-quick-actions--compact">
                   <div className="section-heading lens-version-header">
                     <div>
@@ -2679,31 +2946,33 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   </div>
                 </article>
               </div>
-
-              {/* Director feedback moved to dedicated tab below */}
             </div>
 
+            {/* 视频预览区域 */}
             <div className="lens-detail-stack lens-detail-columns lens-detail-columns-top">
               <section className="panel stack-gap lens-detail-subpanel lens-detail-feature-panel">
                 <div className="section-heading lens-detail-header">
                   <div>
-                      <h4>视频预览</h4>
-                        <p className="muted">同时查看当前制作视频与Layout视频；双预览都存在时可联动播放，缺失时仍可单独预览已有视频。</p>
-                    </div>
-                    <span className={currentMovBinding ? 'environment-pill ready' : currentMovDebug?.candidateCount && currentMovDebug.candidateCount > 1 ? 'environment-pill warning' : 'environment-pill blocked'}>
-                      {currentMovBinding ? '已匹配' : currentMovDebug?.candidateCount && currentMovDebug.candidateCount > 1 ? '待确认' : '未匹配'}
-                    </span>
+                    <h4>视频预览</h4>
+                    <p className="muted">同时查看当前制作视频与Layout视频；双预览都存在时可联动播放，缺失时仍可单独预览已有视频。</p>
                   </div>
+                  <span className={currentMovBinding ? 'environment-pill ready' : currentMovDebug?.candidateCount && currentMovDebug.candidateCount > 1 ? 'environment-pill warning' : 'environment-pill blocked'}>
+                    {currentMovBinding ? '已匹配' : currentMovDebug?.candidateCount && currentMovDebug.candidateCount > 1 ? '待确认' : '未匹配'}
+                  </span>
+                </div>
 
-                  {hasDualPreview ? (
-                    <div className="actions-row compact-actions wrap-actions lens-video-sync-actions">
-                      <button className="secondary-button" onClick={handlePlayBothPreviews} type="button">同时播放</button>
-                      <button className="secondary-button" onClick={handlePauseBothPreviews} type="button">同时暂停</button>
-                      <button className="secondary-button" onClick={handleResetBothPreviews} type="button">回到开头</button>
-                    </div>
-                  ) : null}
+                {/* 双视频联动播放控制 */}
+                {hasDualPreview ? (
+                  <div className="actions-row compact-actions wrap-actions lens-video-sync-actions">
+                    <button className="secondary-button" onClick={handlePlayBothPreviews} type="button">同时播放</button>
+                    <button className="secondary-button" onClick={handlePauseBothPreviews} type="button">同时暂停</button>
+                    <button className="secondary-button" onClick={handleResetBothPreviews} type="button">回到开头</button>
+                  </div>
+                ) : null}
 
+                {/* 制作视频与 Layout 视频对比网格 */}
                 <div className="lens-video-compare-grid">
+                  {/* 制作视频卡片 */}
                   <article className="lens-history-card lens-video-preview-card">
                     <div className="lens-video-preview-card__header">
                       <div>
@@ -2734,6 +3003,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           {previewLoadStates.production || currentMovBinding.mediaPreviewMode === 'pending' ? <small className="muted">正在准备制作视频预览；首次打开 4K 或高规格源时可能需要几秒生成兼容副本。</small> : null}
                           <small className="muted">预览源：{currentMovBinding.mediaPreviewMode ?? 'unknown'} · {currentMovBinding.mediaPreviewUrl ?? '无 URL'}{currentMovBinding.mediaPreviewNote ? ` · ${currentMovBinding.mediaPreviewNote}` : ''}</small>
                         </div>
+                        {/* 视频元数据 */}
                         <div className="lens-video-meta-grid">
                           <div className="lens-video-metric-pair-row">
                             <div>
@@ -2780,6 +3050,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                     )}
                   </article>
 
+                  {/* Layout 视频卡片 */}
                   <article className="lens-history-card lens-video-preview-card">
                     <div className="lens-video-preview-card__header">
                       <div>
@@ -2810,6 +3081,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           {previewLoadStates.layout || activeDetail.lens.layoutVideoPreviewMode === 'pending' ? <small className="muted">正在准备Layout视频预览；首次打开 4K 或高规格源时可能需要几秒生成兼容副本。</small> : null}
                           <small className="muted">预览源：{activeDetail.lens.layoutVideoPreviewMode ?? 'unknown'} · {activeDetail.lens.layoutVideoPreviewUrl ?? '无 URL'}{activeDetail.lens.layoutVideoPreviewNote ? ` · ${activeDetail.lens.layoutVideoPreviewNote}` : ''}</small>
                         </div>
+                        {/* Layout 视频元数据 */}
                         <div className="lens-video-meta-grid">
                           <div className="lens-video-metric-pair-row">
                             <div>
@@ -2850,6 +3122,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </section>
             </div>
 
+            {/* 详情标签页切换栏 */}
             <div className="lens-detail-tabs tabs-row">
               <button className={detailTab === 'versions' ? 'tab-button active' : 'tab-button'} onClick={() => setDetailTab('versions')} type="button">
                 版本
@@ -2865,6 +3138,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </button>
             </div>
 
+            {/* 版本资产标签页 */}
             {detailTab === 'versions' ? (
               <section className="panel stack-gap lens-detail-subpanel lens-detail-tab-panel">
                 <div className="section-heading">
@@ -2886,6 +3160,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   <div className="lens-detail-version-list">
                     {filteredDetailVersions.map((version) => (
                     <article className="lens-version-card" key={version.versionNum}>
+                        {/* 版本头部：版本号、文件名、完整度标签 */}
                         <div className="section-heading lens-version-header">
                           <div>
                             <h4>{version.versionNum}</h4>
@@ -2896,6 +3171,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           </span>
                         </div>
 
+                        {/* 版本缺项列表 */}
                         {version.issues.length > 0 ? (
                           <ul className="lens-issue-list">
                             {version.issues.map((issue) => (
@@ -2909,6 +3185,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           </ul>
                         ) : null}
 
+                        {/* 匹配排查详情（可折叠） */}
                         {(version.matchDebug.ma || version.matchDebug.mov) ? (
                           <details className="lens-detail-collapsible">
                             <summary className="lens-detail-collapsible-summary">查看当前版本匹配排查</summary>
@@ -2940,6 +3217,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           </details>
                         ) : null}
 
+                        {/* 已绑定的文件列表 */}
                         {version.bindings.length > 0 ? (
                           <div className="lens-meta-grid">
                             {sortVersionBindings(version.bindings).map((binding) => (
@@ -2964,6 +3242,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </section>
             ) : null}
 
+            {/* Layout 标签页 */}
             {detailTab === 'layout' ? (
               <section className="panel stack-gap lens-detail-subpanel lens-detail-tab-panel">
                 <div className="section-heading">
@@ -2978,6 +3257,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   </div>
                 </div>
 
+                {/* 当前 Layout 映射关系卡片 */}
                 <article className="lens-history-card lens-layout-mapping-card">
                   <div className="section-heading lens-version-header">
                     <div>
@@ -3010,6 +3290,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   </div>
                 </article>
 
+                {/* Layout 候选列表 */}
                 {activeDetail.layoutCandidates.length > 0 ? (
                   <div className="lens-history-list">
                     {activeDetail.layoutCandidates.map((candidate) => (
@@ -3036,9 +3317,10 @@ export function LensPage({ onNavigate }: LensPageProps) {
                     ))}
                   </div>
                 ) : (
-                          <p className="muted">当前没有发现Layout Maya 候选。可先去文件检查页执行筛查，或在这里手动补充。</p>
+                  <p className="muted">当前没有发现Layout Maya 候选。可先去文件检查页执行筛查，或在这里手动补充。</p>
                 )}
 
+                {/* Layout 引用排查结果 */}
                 {activeDetail.layoutReferenceCheck ? (
                   <article className="lens-history-card">
                     <div className="section-heading lens-version-header">
@@ -3064,9 +3346,10 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </section>
             ) : null}
 
+            {/* 生命周期记录标签页 */}
             {detailTab === 'history' ? (
               <section className="panel stack-gap lens-detail-subpanel lens-detail-tab-panel lens-detail-history-panel">
-              <div className="section-heading lens-rework-header">
+                <div className="section-heading lens-rework-header">
                   <div>
                     <h4>生命周期记录</h4>
                     <p className="muted">只保留创建、流转和绑定等关键变更。</p>
@@ -3081,11 +3364,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   <div className="lens-history-list lens-history-timeline">
                     {filteredDetailHistory.map((event, index) => (
                       <article className="lens-history-card lens-history-timeline-card" key={event.eventId}>
+                        {/* 时间轴标记 */}
                         <div className="lens-history-timeline-marker" aria-hidden="true">
                           <span className="lens-history-timeline-dot" />
                           {index < filteredDetailHistory.length - 1 ? <span className="lens-history-timeline-line" /> : null}
                         </div>
                         <div className="lens-history-timeline-content">
+                          {/* 记录头部：标题、编辑按钮、状态标签 */}
                           <div className="lens-history-timeline-header-row">
                             <h4>{event.title}</h4>
                             <div className="lens-history-timeline-header-actions">
@@ -3097,11 +3382,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
                               <span className={statusClassName(event.toStatus ?? activeDetail.lens.lensStatus)}>{event.toStatus ?? activeDetail.lens.lensStatus}</span>
                             </div>
                           </div>
+                          {/* 记录元数据：时间、版本、文件名 */}
                           <div className="lens-history-timeline-meta-row muted">
                             <span>{event.eventTime}</span>
                             <span>版本：{event.versionNum}</span>
                             <span className="lens-history-file-name">命名：{event.fileName}</span>
                           </div>
+                          {/* 详情说明与附件（可折叠） */}
                           {event.detail || event.attachments.length > 0 ? (
                             <details className="lens-detail-collapsible lens-detail-collapsible--inline">
                               <summary className="lens-detail-collapsible-summary">查看详情说明{event.attachments.length > 0 ? `（含 ${event.attachments.length} 张图片）` : ''}</summary>
@@ -3130,6 +3417,8 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </section>
             ) : null}
 
+            {/* 导演反馈标签页 */}
+            {/* 导演反馈标签页内容：回放组件与反馈卡片列表 */}
             {detailTab === 'director-feedback' ? (
               <section className="panel stack-gap lens-detail-subpanel lens-detail-tab-panel lens-director-feedback-panel">
                 <div className="section-heading">
@@ -3176,11 +3465,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </section>
             ) : null}
 
+            {/* 弹窗拖拽调整大小手柄 */}
             <div aria-label="拖拽调整弹窗大小" className="lens-detail-resize-handle" onMouseDown={handleStartDetailResize} role="presentation" />
           </div>
         </div>
       ) : null}
 
+      {/* 返修记录编辑器弹窗 */}
       {reworkRecordEditor ? (
         <div className="lens-detail-modal-overlay" onClick={closeReworkRecordEditor} role="presentation">
           <div className="lens-rework-modal panel stack-gap" onClick={(event) => event.stopPropagation()} onPaste={(event) => void handlePasteReworkRecordImages(event)}>
@@ -3194,6 +3485,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </button>
             </div>
 
+            {/* 返修说明文本域 */}
             <label className="field">
               <span>返修说明</span>
               <textarea
@@ -3206,6 +3498,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               />
             </label>
 
+            {/* 返修图片编辑区 */}
             <div className="field stack-gap">
               <div className="section-heading">
                 <div>
@@ -3217,6 +3510,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 </button>
               </div>
 
+              {/* 已保存的附件列表 */}
               {reworkRecordEditor.attachments.length > 0 ? (
                 <div className="lens-history-attachment-grid">
                   {reworkRecordEditor.attachments.map((attachment, index) => {
@@ -3242,6 +3536,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 <p className="muted">当前返修记录还没有已保存图片。</p>
               )}
 
+              {/* 待新增的本地图片列表 */}
               {reworkRecordEditor.newImagePaths.length > 0 ? (
                 <div className="lens-pending-image-list">
                   {reworkRecordEditor.newImagePaths.map((filePath, index) => (
@@ -3259,6 +3554,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               ) : null}
             </div>
 
+            {/* 保存/关闭按钮 */}
             <div className="actions-row wrap-actions lens-form-actions">
               <button className="primary-button" disabled={isSavingReworkRecord} onClick={() => void submitReworkRecordEditor()} type="button">
                 {isSavingReworkRecord ? '保存中…' : '保存返修记录'}
@@ -3271,6 +3567,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
         </div>
       ) : null}
 
+      {/* 返修图片预览弹窗 */}
       {previewingReworkAttachment ? (
         <div className="lens-detail-modal-overlay" onClick={closeReworkAttachmentPreview} role="presentation">
           <div className="lens-image-preview-modal panel stack-gap" onClick={(event) => event.stopPropagation()}>
@@ -3300,6 +3597,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
         </div>
       ) : null}
 
+      {/* 返修流转弹窗（单镜头/批量） */}
       {reworkDialog ? (
         <div className="lens-detail-modal-overlay" onClick={closeReworkDialog} role="presentation">
           <div className="lens-rework-modal panel stack-gap" onClick={(event) => event.stopPropagation()} onPaste={(event) => void handlePasteReworkDialogImages(event)}>
@@ -3317,6 +3615,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               </button>
             </div>
 
+            {/* 返修说明文本域 */}
             <label className="field">
               <span>返修记录（可留空）</span>
               <textarea
@@ -3329,6 +3628,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               />
             </label>
 
+            {/* 待插入图片区 */}
             <div className="field stack-gap">
               <div className="section-heading">
                 <div>
@@ -3358,6 +3658,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
               )}
             </div>
 
+            {/* 确认/关闭按钮 */}
             <div className="actions-row wrap-actions lens-form-actions">
               <button className="primary-button" disabled={(reworkDialog.mode === 'single' && pendingStatusLensId === reworkDialog.lensId) || pendingBatchAction === 'rework'} onClick={() => void submitReworkDialog()} type="button">
                 确认返修
@@ -3373,6 +3674,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
   );
 }
 
+/* ======================== 组件外部辅助函数 ======================== */
+
+/** 根据镜头状态返回对应的 CSS 类名 */
 function statusClassName(status: LensStatus): string {
   if (status === '关闭') {
     return 'environment-pill blocked';
@@ -3385,6 +3689,7 @@ function statusClassName(status: LensStatus): string {
   return status === '提交' ? 'environment-pill info' : 'environment-pill warning';
 }
 
+/** 根据二级审片状态返回对应的 CSS 类名 */
 function internalReviewStatusClassName(status?: InternalReviewStatusCode | null): string {
   if (status === 'DIRECTOR_APPROVED') {
     return 'environment-pill ready';
@@ -3401,14 +3706,12 @@ function internalReviewStatusClassName(status?: InternalReviewStatusCode | null)
   return 'environment-pill blocked';
 }
 
-// Delegated to shared module. These wrappers exist for backward compat.
-// function getBaseName same as import
-// function arrayBufferToBase64 same as import
-
+/** 格式化镜头缺项摘要：以分号连接所有 issue message */
 function formatIssueSummary(issues: LensVersionIssue[]): string {
   return issues.map((issue) => issue.message).join('；');
 }
 
+/** 获取镜头版本文件的提醒严重级别 */
 function getLensReminderSeverity(lens: LensRecord): 'ready' | 'warning' | 'blocked' {
   if (lens.currentVersionReady) {
     return 'ready';
@@ -3417,11 +3720,13 @@ function getLensReminderSeverity(lens: LensRecord): 'ready' | 'warning' | 'block
   return lens.currentVersionMatchedFileNames.length === 0 ? 'blocked' : 'warning';
 }
 
+/** 获取版本文件提醒 Pill 的 CSS 类名 */
 function getLensReminderPillClassName(lens: LensRecord): string {
   const severity = getLensReminderSeverity(lens);
   return severity === 'warning' ? 'environment-pill warning' : severity === 'blocked' ? 'environment-pill blocked' : 'environment-pill ready';
 }
 
+/** 获取版本文件提醒 Pill 的显示文本 */
 function getLensReminderPillLabel(lens: LensRecord): string {
   const severity = getLensReminderSeverity(lens);
   if (severity === 'warning') {
@@ -3435,16 +3740,19 @@ function getLensReminderPillLabel(lens: LensRecord): string {
   return '版本完整';
 }
 
+/** 获取版本文件提醒文本的 CSS 类名 */
 function getLensReminderTextClassName(lens: LensRecord): string {
   const severity = getLensReminderSeverity(lens);
   return severity === 'warning' ? 'warning-copy' : severity === 'blocked' ? 'danger-copy' : 'muted';
 }
 
+/** 获取版本文件提醒的标题文本 */
 function getLensReminderHeadline(lens: LensRecord): string {
   const severity = getLensReminderSeverity(lens);
   return severity === 'ready' ? '完整' : severity === 'warning' ? '待处理' : '缺失';
 }
 
+/** 获取版本文件提醒的详细文本 */
 function getLensReminderTextLabel(lens: LensRecord): string {
   const severity = getLensReminderSeverity(lens);
   if (severity === 'ready') {
@@ -3459,6 +3767,7 @@ function getLensReminderTextLabel(lens: LensRecord): string {
   return severity === 'blocked' ? 'MA / MOV 文件缺失' : '当前版本未完全匹配';
 }
 
+/** 获取镜头缺项的文件类型摘要（MA 文件 / 视频文件） */
 function getLensMissingFileTypeSummary(issues: LensVersionIssue[]): string {
   const fileTypeLabels = issues.reduce<string[]>((labels, issue) => {
     if (issue.reason !== '未绑定' && issue.reason !== '文件缺失') {
@@ -3480,6 +3789,7 @@ function getLensMissingFileTypeSummary(issues: LensVersionIssue[]): string {
   return fileTypeLabels.join('、');
 }
 
+/** 渲染已匹配文件名的可折叠详情列表 */
 function renderLensVersionMatchedFileNames(lens: LensRecord): ReactElement | null {
   if (lens.currentVersionMatchedFileNames.length === 0) {
     return null;
@@ -3497,6 +3807,7 @@ function renderLensVersionMatchedFileNames(lens: LensRecord): ReactElement | nul
   );
 }
 
+/** 获取详情弹窗的默认尺寸 */
 function getDefaultDetailModalSize(): DetailModalSize {
   if (typeof window === 'undefined') {
     return { width: 1360, height: 980 };
@@ -3508,6 +3819,7 @@ function getDefaultDetailModalSize(): DetailModalSize {
   });
 }
 
+/** 获取详情弹窗最大化时的尺寸 */
 function getMaximizedDetailModalSize(): DetailModalSize {
   if (typeof window === 'undefined') {
     return { width: 1480, height: 1040 };
@@ -3519,6 +3831,7 @@ function getMaximizedDetailModalSize(): DetailModalSize {
   });
 }
 
+/** 将详情弹窗尺寸限制在窗口可见范围内 */
 function clampDetailModalSize(size: DetailModalSize): DetailModalSize {
   if (typeof window === 'undefined') {
     return size;
@@ -3535,11 +3848,13 @@ function clampDetailModalSize(size: DetailModalSize): DetailModalSize {
   };
 }
 
+/** 格式化版本缺项类型摘要 */
 function getVersionIssueTypeSummary(issues: LensVersionIssue[]): string {
   const issueTypes = Array.from(new Set(issues.map((issue) => `${issue.fileType.toUpperCase()}-${issue.reason}`)));
   return issueTypes.join(' · ');
 }
 
+/** 获取镜头 Layout 状态的中文描述文本 */
 function getLayoutIssueTypeLabel(lens: LensRecord): string {
   if (lens.layoutReady && lens.layoutVideoReady) {
     return lens.layoutCandidateCount > 1 ? 'Maya 与视频已匹配，可继续确认最佳版本' : 'Maya 与视频均可用';
@@ -3564,6 +3879,7 @@ function getLayoutIssueTypeLabel(lens: LensRecord): string {
   return lens.selectedLayoutFileName ? '当前采用项磁盘缺失' : '已有候选但未确认采用项';
 }
 
+/** 获取 Layout 摘要的严重级别 */
 function getLayoutSummarySeverity(lens: LensRecord): 'ready' | 'warning' | 'blocked' {
   if (lens.layoutReady && lens.layoutVideoReady) {
     return 'ready';
@@ -3576,26 +3892,31 @@ function getLayoutSummarySeverity(lens: LensRecord): 'ready' | 'warning' | 'bloc
   return 'blocked';
 }
 
+/** 获取 Layout 摘要 Pill 的 CSS 类名 */
 function getLayoutSummaryPillClassName(lens: LensRecord): string {
   const severity = getLayoutSummarySeverity(lens);
   return severity === 'ready' ? 'environment-pill ready' : severity === 'warning' ? 'environment-pill warning' : 'environment-pill blocked';
 }
 
+/** 获取 Layout 摘要 Pill 的显示文本 */
 function getLayoutSummaryPillLabel(lens: LensRecord): string {
   const severity = getLayoutSummarySeverity(lens);
   return severity === 'ready' ? 'Layout就绪' : severity === 'warning' ? 'Layout待补全' : 'Layout缺失';
 }
 
+/** 获取 Layout 摘要的标题文本 */
 function getLayoutSummaryHeadline(lens: LensRecord): string {
   const severity = getLayoutSummarySeverity(lens);
   return severity === 'ready' ? '已就绪' : severity === 'warning' ? '待补全' : '待处理';
 }
 
+/** 获取 Layout 摘要文本的 CSS 类名 */
 function getLayoutSummaryTextClassName(lens: LensRecord): string {
   const severity = getLayoutSummarySeverity(lens);
   return severity === 'ready' ? 'muted' : severity === 'warning' ? 'warning-copy' : 'danger-copy';
 }
 
+/** 获取 Layout 视频匹配依据的描述文本 */
 function getLayoutVideoMatchHint(hasSelectedLayout: boolean, hasMatchedVideo: boolean): string {
   if (!hasSelectedLayout) {
     return '自动匹配会优先基于当前采用的Layout Maya 进行；多候选时默认选择版本号更大、命名更标准的视频。';
@@ -3608,12 +3929,14 @@ function getLayoutVideoMatchHint(hasSelectedLayout: boolean, hasMatchedVideo: bo
   return '当前视频来自自动匹配结果：优先基于当前采用的Layout Maya；多候选时默认选择版本号更大、命名更标准的视频。';
 }
 
+/** 格式化匹配候选列表为可读字符串 */
 function formatMatchCandidates(candidates: LensVersionMatchDebug['candidates']): string {
   return candidates
     .map((candidate) => `${candidate.relativePath}${candidate.sourceRoot ? ` [${candidate.sourceRoot}]` : ''}（score:${candidate.score}${candidate.extractedVersion ? ` / V${String(candidate.extractedVersion).padStart(2, '0')}` : ''}）`)
     .join('；');
 }
 
+/** 按文件类型排序版本绑定：mov 排在前面 */
 function sortVersionBindings<T extends { fileType: BindFileType }>(bindings: T[]): T[] {
   return [...bindings].sort((left, right) => {
     if (left.fileType === right.fileType) {
@@ -3624,6 +3947,7 @@ function sortVersionBindings<T extends { fileType: BindFileType }>(bindings: T[]
   });
 }
 
+/** 格式化视频帧率显示 */
 function formatVideoFps(value?: number): string {
   if (!value || !Number.isFinite(value)) {
     return '—';
@@ -3632,6 +3956,7 @@ function formatVideoFps(value?: number): string {
   return `${value.toFixed(value >= 10 ? 2 : 3)} fps`;
 }
 
+/** 格式化秒数为 MM:SS 格式 */
 function formatDurationSeconds(value?: number): string {
   if (!value || !Number.isFinite(value)) {
     return '—';
@@ -3643,6 +3968,7 @@ function formatDurationSeconds(value?: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+/** 根据视频 URL 后缀推断 MIME 类型 */
 function getVideoMimeType(sourceUrl?: string): string {
   if (!sourceUrl) {
     return 'video/mp4';
@@ -3679,6 +4005,7 @@ function getVideoMimeType(sourceUrl?: string): string {
   return 'video/mp4';
 }
 
+/** 格式化视频分辨率显示 */
 function formatVideoResolution(width?: number, height?: number): string {
   if (!width || !height || !Number.isFinite(width) || !Number.isFinite(height)) {
     return '分辨率未知';
@@ -3687,6 +4014,7 @@ function formatVideoResolution(width?: number, height?: number): string {
   return `${width}×${height}`;
 }
 
+/** 格式化视频编码诊断信息：分辨率 + 编码 + Profile + 像素格式 */
 function formatVideoDiagnosticSummary(
   width?: number,
   height?: number,
@@ -3704,6 +4032,10 @@ function formatVideoDiagnosticSummary(
   return segments.length > 0 ? segments.join(' · ') : '未获取到视频编码信息';
 }
 
+/**
+ * 检查视频编码兼容性并返回兼容性提示
+ * 针对 HEVC/H.265、10-bit、4:2:2/4:4:4 等 Electron/Chromium 不擅长的规格给出警告
+ */
 function getVideoCompatibilityHint(codecName?: string, pixelFormat?: string): string | null {
   const normalizedCodec = codecName?.trim().toLowerCase() ?? '';
   const normalizedPixelFormat = pixelFormat?.trim().toLowerCase() ?? '';
@@ -3723,6 +4055,7 @@ function getVideoCompatibilityHint(codecName?: string, pixelFormat?: string): st
   return null;
 }
 
+/** 获取统一的播放失败提示信息 */
 function getPlaybackFailureMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return `播放失败：${error.message}`;
@@ -3731,6 +4064,7 @@ function getPlaybackFailureMessage(error: unknown): string {
   return '播放失败：Electron 视频解码器未能启动该文件，请重点检查编码格式兼容性。';
 }
 
+/** 根据 MediaError 获取详细的视频加载错误信息 */
 function getVideoElementErrorMessage(error: MediaError | null): string {
   if (!error) {
     return '视频加载失败：浏览器没有返回详细错误，请重点检查编码格式兼容性。';
@@ -3750,6 +4084,7 @@ function getVideoElementErrorMessage(error: MediaError | null): string {
   }
 }
 
+/** 根据帧数和默认帧率计算时长（MM:SS 格式） */
 function formatFrameDuration(frameCount: number, fps: number = DEFAULT_LENS_FPS): string {
   if (!Number.isFinite(frameCount) || frameCount <= 0 || !Number.isFinite(fps) || fps <= 0) {
     return '00:00';
@@ -3758,6 +4093,7 @@ function formatFrameDuration(frameCount: number, fps: number = DEFAULT_LENS_FPS)
   return formatDurationSeconds(frameCount / fps);
 }
 
+/** 格式化百分比显示 */
 function formatPercentage(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return '0%';
@@ -3766,6 +4102,7 @@ function formatPercentage(value: number): string {
   return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`;
 }
 
+/** 检查镜头是否匹配近期状态时间筛选条件 */
 function matchesRecentStatusTimeFilter(lens: LensRecord, filter: RecentTimeRangeFilter, startDate: string, endDate: string): boolean {
   if (filter === 'all') {
     return true;
@@ -3811,6 +4148,7 @@ function matchesRecentStatusTimeFilter(lens: LensRecord, filter: RecentTimeRange
   return true;
 }
 
+/** 解析日期时间字符串为 Date 对象 */
 function parseDateTimeValue(value: string): Date | null {
   if (!value.trim()) {
     return null;
@@ -3821,6 +4159,7 @@ function parseDateTimeValue(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+/** 格式化镜头相关日期时间为中文显示格式 */
 function formatLensDateTime(value: string): string {
   const parsed = parseDateTimeValue(value);
   if (!parsed) {
@@ -3837,6 +4176,7 @@ function formatLensDateTime(value: string): string {
   }).format(parsed);
 }
 
+/** 解析日期选择器输入的值为 Date 对象，支持指定为当日开始或结束时刻 */
 function parseDateInputValue(value: string, endOfDay: boolean): Date | null {
   if (!value.trim()) {
     return null;
@@ -3846,10 +4186,12 @@ function parseDateInputValue(value: string, endOfDay: boolean): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+/** 判断镜头是否包含任意缺项（版本缺项或 Layout 未就绪） */
 function hasAnyLensIssue(lens: LensRecord): boolean {
   return lens.currentVersionIssues.length > 0 || !lens.layoutReady;
 }
 
+/** 判断镜头是否匹配缺项类型筛选 */
 function matchesLensMissingFilter(lens: LensRecord, filter: MissingItemFilter): boolean {
   switch (filter) {
     case 'any':
@@ -3866,6 +4208,7 @@ function matchesLensMissingFilter(lens: LensRecord, filter: MissingItemFilter): 
   }
 }
 
+/** 判断镜头是否匹配问题类型筛选 */
 function matchesProblemTypeFilter(lens: LensRecord, filter: ProblemTypeFilter): boolean {
   switch (filter) {
     case 'layout-missing':
@@ -3888,6 +4231,7 @@ function matchesProblemTypeFilter(lens: LensRecord, filter: ProblemTypeFilter): 
   }
 }
 
+/** 根据排序字段和方向比较两个镜头记录 */
 function compareLenses(left: LensRecord, right: LensRecord, field: LensSortField, direction: SortDirection): number {
   const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
   const factor = direction === 'asc' ? 1 : -1;
