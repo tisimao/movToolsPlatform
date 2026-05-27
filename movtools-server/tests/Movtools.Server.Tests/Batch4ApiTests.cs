@@ -39,7 +39,7 @@ public sealed class Batch4ApiTests
             .ReadAsJsonAsync<LensResponse>(JsonOptions);
         
         var ready = await TransitionLensToDirectorApprovedAsync(adminClient, lens!);
-        var submitted = await TransitionLensToSubmittedAsync(adminClient, ready);
+        await TransitionLensToSubmittedAsync(adminClient, ready);
         
         // Submit for review
         var reviewRequest = new ReviewSubmitRequest(lens.Id, "Please review this");

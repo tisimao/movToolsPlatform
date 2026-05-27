@@ -16,9 +16,13 @@ import { getDataSource, lensService, pathMappingService, reviewService } from '.
 import { refreshAndSyncLensBindings } from '../lib/lensBindingSync';
 import { DirectorFeedbackPlayback } from '../components/lens/DirectorFeedbackPlayback';
 import { resolvePlaybackSource } from '../lib/reviewPlayback';
+import { buildVersionScopedShotFeedbackView, type ShotFeedbackView } from '../lib/reviewFrameFeedback';
 import { syncAutoInitializedLensFrames } from '../services/repositoryService';
 import { apiClient } from '../api/client';
 import { canMarkFixUpdated, canMarkReadyForReview, canResubmitForReview, canSubmitLens, getInternalReviewStatusLabel, getSubmissionDisabledReason, INTERNAL_REVIEW_STATUS_LABELS, type InternalReviewStatusCode } from '../lib/internalReview';
+import { filterDirectorVisibleReviewTasks } from '../lib/reviewTaskVisibility';
+import { DEFAULT_REVIEW_PLAYBACK_FPS } from '../lib/reviewPlaybackFps';
+import { resolveProjectPlaybackFps } from '../lib/projectPlaybackFps';
 
 interface LensFormState {
   lensCode: string;
@@ -136,14 +140,10 @@ const defaultForm: LensFormState = {
   lensStatus: '制作',
 };
 
-const DEFAULT_LENS_FPS = 24;
+const DEFAULT_LENS_FPS = DEFAULT_REVIEW_PLAYBACK_FPS;
 
 function getFileNameFromPath(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
-}
-
-function normalizeVersionKey(versionNum?: string | null): string {
-  return (versionNum ?? '').trim().toUpperCase();
 }
 
 function normalizePathForComparison(value: string): string {
@@ -229,10 +229,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const currentRole = getPrimaryRole(user);
   const isMaker = currentRole === 'maker';
   const isProducer = currentRole === 'producer';
+  const canOpenProducerReviewTask = currentRole === 'producer';
+  const canCompleteFeedbackFix = currentRole === 'maker' || currentRole === 'producer' || currentRole === 'admin' || currentRole === 'system-admin';
   const columnStorageKey = `movtools.lens.columns.v1:${currentRole}`;
   const {
     activeProjectId: workspaceActiveProjectId,
     activeEpisodeId: workspaceActiveEpisodeId,
+    projects,
     currentProjectMembers,
     setCurrentProjectMembers,
   } = useProjectStore();
@@ -265,7 +268,6 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const [isSavingReworkRecord, setIsSavingReworkRecord] = useState(false);
   const [previewingReworkAttachment, setPreviewingReworkAttachment] = useState<ReworkAttachmentPreviewState | null>(null);
   const [editorDialog, setEditorDialog] = useState<LensEditorDialogState | null>(null);
-  const [reviewFeedbacks, setReviewFeedbacks] = useState<import('../types/review').ReviewFeedback[]>([]);
   const [activeReviewTaskId, setActiveReviewTaskId] = useState<string | null>(null);
   const [sortField, setSortField] = useState<LensSortField>('lensCode');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -273,8 +275,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const [draftTasks, setDraftTasks] = useState<import('../types/review').ReviewTaskSummary[]>([]);
   const [pendingStatusLensId, setPendingStatusLensId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<LensDetailTab>('versions');
-  const [directorFeedbackMaskEnabled, setDirectorFeedbackMaskEnabled] = useState(false);
-  const directorFeedbackMaskStorageKey = `movtools.lens.director-feedback-mask.v1:${currentRole}`;
+  const [directorFeedbackView, setDirectorFeedbackView] = useState<ShotFeedbackView | null>(null);
+  const [directorFeedbackSeekTarget, setDirectorFeedbackSeekTarget] = useState<{ frameNumber: number; requestId: number } | null>(null);
+  const directorFeedbackSeekRequestRef = useRef(0);
   const [detailModalSize, setDetailModalSize] = useState<DetailModalSize | null>(null);
   const [isDetailModalMaximized, setIsDetailModalMaximized] = useState(false);
   const listRequestSeqRef = useRef(0);
@@ -321,35 +324,6 @@ export function LensPage({ onNavigate }: LensPageProps) {
       setIsColumnSettingsCollapsed(true);
     }
   }, [columnPanelStorageKey]);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(directorFeedbackMaskStorageKey);
-      setDirectorFeedbackMaskEnabled(stored === '1');
-    } catch {
-      setDirectorFeedbackMaskEnabled(false);
-    }
-  }, [directorFeedbackMaskStorageKey]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(directorFeedbackMaskStorageKey, directorFeedbackMaskEnabled ? '1' : '0');
-    } catch {
-      // ignore local storage write failures
-    }
-  }, [directorFeedbackMaskEnabled, directorFeedbackMaskStorageKey]);
-
-  useEffect(() => {
-    if (!activeDetail) {
-      return;
-    }
-
-    const versionKey = normalizeVersionKey(activeDetail.lens.versionNum);
-    const hasCurrentRound = (activeDetail.directorFeedbacks ?? reviewFeedbacks).some((feedback) => normalizeVersionKey(feedback.versionNum) === versionKey);
-    if (!hasCurrentRound) {
-      setDirectorFeedbackMaskEnabled(false);
-    }
-  }, [activeDetail, reviewFeedbacks]);
 
   useEffect(() => {
     window.localStorage.setItem(columnStorageKey, JSON.stringify(visibleColumns));
@@ -607,6 +581,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
   function closeActiveDetail(): void {
     detailRequestSeqRef.current += 1;
     setActiveDetail(null);
+    setActiveReviewTaskId(null);
+    setDirectorFeedbackView(null);
+    setDirectorFeedbackSeekTarget(null);
     setReworkRecordEditor(null);
     setPreviewingReworkAttachment(null);
     setIsDetailLoading(false);
@@ -633,7 +610,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
       setIsDetailModalMaximized(false);
       setActiveDetail(response.detail);
       setActiveReviewTaskId(response.detail.lens.latestReviewTaskId ?? null);
-      await refreshDirectorFeedbacks(lensId);
+      await refreshDirectorFeedbacks(lensId, response.detail.lens.versionNum);
       setReworkRecordEditor(null);
       setPreviewingReworkAttachment(null);
     } catch (error) {
@@ -669,7 +646,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
       if (response.success && response.detail && response.detail.lens.lensId === lensId) {
         setActiveDetail(response.detail);
         setActiveReviewTaskId(response.detail.lens.latestReviewTaskId ?? null);
-        await refreshDirectorFeedbacks(lensId);
+        await refreshDirectorFeedbacks(lensId, response.detail.lens.versionNum);
       }
     } finally {
       if (!options?.silent && requestSeq === detailRequestSeqRef.current) {
@@ -678,11 +655,34 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
-  async function refreshDirectorFeedbacks(lensId: string): Promise<void> {
+  async function refreshDirectorFeedbacks(lensId: string, currentVersionNum?: string | null): Promise<void> {
     const response = await reviewService.listReviewFeedbacks(lensId);
     if (response.success) {
-      setReviewFeedbacks(response.feedbacks);
+      setDirectorFeedbackView(buildVersionScopedShotFeedbackView(lensId, response, currentVersionNum, { shotId: lensId }));
     }
+  }
+
+  async function handleOpenReviewTaskFromLens(taskId: string): Promise<void> {
+    if (currentRole !== 'director' && currentRole !== 'producer') {
+      setResult({ success: false, error: '当前角色没有任务级审片入口。' });
+      return;
+    }
+
+    const response = await reviewService.getTaskDetail(taskId);
+    if (!response.success || !response.detail) {
+      setResult({ success: false, error: response.error ?? '读取审片任务失败。' });
+      return;
+    }
+
+    const taskVisibleToDirector = filterDirectorVisibleReviewTasks([
+      {
+        status: response.detail.status,
+        producerStatus: response.detail.producerStatus,
+      },
+    ]).length > 0;
+
+    setPendingReviewTaskId(taskId);
+    onNavigate?.(taskVisibleToDirector ? 'review' : 'producer-review');
   }
 
   async function updateInternalReviewStatus(lensId: string, targetStatusCode: InternalReviewStatusCode): Promise<void> {
@@ -712,7 +712,6 @@ export function LensPage({ onNavigate }: LensPageProps) {
         await refreshLenses();
         if (activeDetail?.lens.lensId === lensId) {
           await refreshActiveDetail();
-          await refreshDirectorFeedbacks(lensId);
         }
         setResult(response);
       } else {
@@ -1034,13 +1033,19 @@ export function LensPage({ onNavigate }: LensPageProps) {
     [activeDetail],
   );
   const currentDirectorFeedbacks = useMemo(() => {
-    if (!activeDetail) {
-      return reviewFeedbacks;
-    }
+    return directorFeedbackView?.feedbacks ?? [];
+  }, [directorFeedbackView]);
 
-    const versionKey = normalizeVersionKey(activeDetail.lens.versionNum);
-    return (activeDetail.directorFeedbacks ?? reviewFeedbacks).filter((feedback) => normalizeVersionKey(feedback.versionNum) === versionKey);
-  }, [activeDetail, reviewFeedbacks]);
+  const currentDirectorFeedbackRoundTimeline = useMemo(
+    () => directorFeedbackView?.latestRoundDrawingTimeline ?? directorFeedbackView?.latestRoundDrawingFrames ?? [],
+    [directorFeedbackView],
+  );
+
+  const currentProject = useMemo(
+    () => (workspaceActiveProjectId ? projects.find((project) => project.projectId === workspaceActiveProjectId) ?? null : null),
+    [projects, workspaceActiveProjectId],
+  );
+  const playbackFps = useMemo(() => resolveProjectPlaybackFps(currentProject), [currentProject]);
 
   const directorFeedbackPlaybackSource = useMemo(() => {
     if (!activeDetail) {
@@ -1057,7 +1062,33 @@ export function LensPage({ onNavigate }: LensPageProps) {
       actualVersionNum: versionNum,
       feedbackCount: currentDirectorFeedbacks.length,
     }, activeDetail);
-  }, [activeDetail, currentDirectorFeedbacks.length]);
+    }, [activeDetail, currentDirectorFeedbacks.length]);
+
+  const directorFeedbackPlaybackNotice = useMemo(() => {
+    if (!directorFeedbackPlaybackSource) {
+      return '当前镜头没有可回放素材。';
+    }
+
+    if (!directorFeedbackPlaybackSource.isPlayable) {
+      return '版本视频与 Layout 视频均未解析到可播放地址。';
+    }
+
+    if (directorFeedbackPlaybackSource.resolvedSourceType === 'layout') {
+      return '当前使用 Layout 补位回放，正式版本视频缺失。';
+    }
+
+    if (directorFeedbackPlaybackSource.resolvedSourceType === 'fallback-version') {
+      return '未命中当前版本，已自动切换到可播放版本。';
+    }
+
+    return '当前使用版本视频回放。';
+  }, [directorFeedbackPlaybackSource]);
+
+  function handleDirectorFeedbackCardClick(feedback: import('../types/review').ReviewFeedback): void {
+    const frameNumber = feedback.frameNumber ?? 1;
+    directorFeedbackSeekRequestRef.current += 1;
+    setDirectorFeedbackSeekTarget({ frameNumber, requestId: directorFeedbackSeekRequestRef.current });
+  }
 
   const hasPendingPreviewProxy = Boolean(currentMovBinding?.mediaPreviewMode === 'pending' || activeDetail?.lens.layoutVideoPreviewMode === 'pending');
 
@@ -2541,15 +2572,16 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 </article>
                 <article className="lens-summary-card">
                   <span className="lens-summary-label">所属审片任务</span>
-                  {activeDetail.lens.latestReviewTaskId ? (
-                    <>
-                      <strong>{activeDetail.lens.latestReviewTaskId.slice(0, 8)}...</strong>
-                      <button className="ghost-button" onClick={() => { if (activeDetail?.lens.latestReviewTaskId) { setPendingReviewTaskId(activeDetail.lens.latestReviewTaskId); } onNavigate?.('producer-review'); }} style={{ fontSize: '0.75rem' }} type="button">定位到制片任务页</button>
-                      {currentRole === 'director' ? (
-                        <button className="ghost-button" onClick={() => { if (activeDetail?.lens.latestReviewTaskId) { setPendingReviewTaskId(activeDetail.lens.latestReviewTaskId); } onNavigate?.('review'); }} style={{ fontSize: '0.75rem' }} type="button">进入导演审片</button>
-                      ) : null}
-                    </>
-                  ) : (
+                    {activeDetail.lens.latestReviewTaskId ? (
+                      <>
+                        <strong>{activeDetail.lens.latestReviewTaskId.slice(0, 8)}...</strong>
+                        {currentRole === 'director' ? (
+                          <button className="ghost-button" onClick={() => { if (activeDetail?.lens.latestReviewTaskId) { void handleOpenReviewTaskFromLens(activeDetail.lens.latestReviewTaskId); } }} style={{ fontSize: '0.75rem' }} type="button">进入导演审片</button>
+                        ) : canOpenProducerReviewTask ? (
+                          <button className="ghost-button" onClick={() => { if (activeDetail?.lens.latestReviewTaskId) { void handleOpenReviewTaskFromLens(activeDetail.lens.latestReviewTaskId); } }} style={{ fontSize: '0.75rem' }} type="button">定位到制片任务页</button>
+                        ) : null}
+                      </>
+                    ) : (
                     <>
                       <strong className="muted">未加入任务</strong>
                       {isProducer ? <small className="muted">可勾选后从"审片任务批量操作"加入任务</small> : null}
@@ -2619,7 +2651,14 @@ export function LensPage({ onNavigate }: LensPageProps) {
                     <button className="secondary-button" disabled={isDetailLoading} onClick={() => void refreshActiveDetail()} type="button">{isDetailLoading ? '刷新中…' : '刷新详情'}</button>
                     {canUseLocalFileChecks ? <button className="secondary-button" disabled={isDetailLoading} onClick={() => void handleSingleLensCheck(activeDetail.lens.lensId)} type="button">检查文件</button> : null}
                     {activeDetail.lens.latestReviewTaskId ? (
-                      <button className="secondary-button" onClick={() => { setPendingReviewTaskId(activeDetail.lens.latestReviewTaskId!); if (currentRole === 'director') { onNavigate?.('review'); } else { onNavigate?.('producer-review'); } }} type="button">{currentRole === 'director' ? '到导演审片' : '到制片任务页'}</button>
+                      currentRole === 'director' ? (
+                        <button className="secondary-button" onClick={() => { void handleOpenReviewTaskFromLens(activeDetail.lens.latestReviewTaskId!); }} type="button">到导演审片</button>
+                      ) : canOpenProducerReviewTask ? (
+                        <button className="secondary-button" onClick={() => { void handleOpenReviewTaskFromLens(activeDetail.lens.latestReviewTaskId!); }} type="button">到制片任务页</button>
+                      ) : null
+                    ) : null}
+                    {canCompleteFeedbackFix && activeDetail.lens.internalReviewStatusCode === 'PENDING_FEEDBACK_FIX' ? (
+                      <button className="secondary-button lens-row-action-primary" disabled={pendingStatusLensId === activeDetail.lens.lensId} onClick={() => void updateInternalReviewStatus(activeDetail.lens.lensId, 'FIX_UPDATED')} type="button">确认本轮反馈已处理完成</button>
                     ) : null}
                     {canModifyLensList ? (
                       <>
@@ -3096,17 +3135,19 @@ export function LensPage({ onNavigate }: LensPageProps) {
                 <div className="section-heading">
                   <div>
                     <h4>导演反馈</h4>
-                    <p className="muted">文字反馈与视频遮罩并列回看；遮罩只消费当前轮正式已提交内容。</p>
+                    <p className="muted">点击反馈条目可直接定位到对应帧，默认显示当前轮正式绘制内容。</p>
                   </div>
                 </div>
 
                 <div className="lens-director-feedback-grid">
                   <DirectorFeedbackPlayback
                     currentVersionNum={activeDetail.lens.versionNum}
+                    drawingTimeline={currentDirectorFeedbackRoundTimeline}
                     feedbacks={currentDirectorFeedbacks}
-                    maskEnabled={directorFeedbackMaskEnabled}
-                    onMaskEnabledChange={setDirectorFeedbackMaskEnabled}
+                    fps={playbackFps}
+                    sourceDescription={directorFeedbackPlaybackNotice}
                     sourceLabel={directorFeedbackPlaybackSource?.sourceLabel ?? ''}
+                    seekTarget={directorFeedbackSeekTarget}
                     videoSrc={directorFeedbackPlaybackSource?.resolvedVideoSrc ?? null}
                   />
 
@@ -3115,7 +3156,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                       <p className="muted">暂无导演反馈卡片。</p>
                     ) : (
                       currentDirectorFeedbacks.map((feedback) => (
-                        <article className="director-feedback-card" key={feedback.feedbackId}>
+                        <article className="director-feedback-card" key={feedback.feedbackId} onClick={() => handleDirectorFeedbackCardClick(feedback)} role="button" tabIndex={0}>
                           <div className="section-heading">
                             <div>
                               <strong>{feedback.decisionName ?? feedback.decisionCode ?? '反馈'}</strong>

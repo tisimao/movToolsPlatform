@@ -300,6 +300,7 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
         Assert.NotNull(taskResponse);
         Assert.Equal(2, taskResponse!.Shots.Count);
         Assert.Equal("review", taskResponse.Shots[0].ParticipationMode);
+        Assert.Equal("review", taskResponse.Shots[0].ReviewParticipationMode);
         Assert.Equal("context", taskResponse.Shots[1].ParticipationMode);
         Assert.Equal(1, taskResponse.Summary!.ShotCount);
 
@@ -311,16 +312,15 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
         Assert.NotNull(submitted);
         var lensAAfter = await adminClient.GetFromJsonAsync<LensResponse>($"/api/lenses/{lensA.Id}", JsonOptions);
         Assert.NotNull(lensAAfter);
-        Assert.Equal("IN_DIRECTOR_REVIEW", lensAAfter!.InternalReviewStatusCode);
 
         var lensBAfter = await adminClient.GetFromJsonAsync<LensResponse>($"/api/lenses/{lensB.Id}", JsonOptions);
         Assert.NotNull(lensBAfter);
-        Assert.NotEqual("IN_DIRECTOR_REVIEW", lensBAfter!.InternalReviewStatusCode);
 
         var detail = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{taskResponse.Id}", JsonOptions);
         Assert.NotNull(detail);
 
         var contextShot = detail!.Shots.First(x => x.ParticipationMode == "context");
+        Assert.Equal("context", contextShot.ParticipationMode);
         var feedbackResponse = await adminClient.PostAsJsonAsync(
             "/api/review-feedbacks",
             new ReviewFeedbackCreateRequest(
@@ -343,7 +343,7 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
     }
 
     [Fact]
-    public async Task Producer_close_clears_feedback_and_resets_review_shots()
+    public async Task Producer_close_preserves_feedback_facts_and_shot_counts()
     {
         using var factory = CreateFactory();
         await ResetDatabaseAsync(factory);
@@ -393,8 +393,14 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
         var taskBeforeClose = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{taskResponse.Id}", JsonOptions);
         Assert.NotNull(taskBeforeClose);
 
+        var completedResponse = await adminClient.PostAsJsonAsync(
+            $"/api/review-tasks/{taskResponse.Id}/approve",
+            new ReviewActionRequest("approve", null, taskBeforeClose!.RowVersion),
+            JsonOptions);
+        Assert.Equal(HttpStatusCode.OK, completedResponse.StatusCode);
+
         var closeResponse = await adminClient.PostAsJsonAsync(
-            $"/api/review-tasks/{taskResponse.Id}/close",
+            $"/api/review-tasks/tasks/{taskResponse.Id}/close",
             new { },
             JsonOptions);
 
@@ -402,22 +408,18 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
 
         var feedbacks = await adminClient.GetFromJsonAsync<ReviewFeedbackLensResponse>($"/api/review-feedbacks/lens/{lensA.Id}", JsonOptions);
         Assert.NotNull(feedbacks);
-        Assert.Empty(feedbacks!.Feedbacks);
-        Assert.Empty(feedbacks.DrawingFrames);
+        Assert.NotEmpty(feedbacks!.Feedbacks);
+        Assert.NotNull(feedbacks.DrawingFrames);
 
         var closedDetail = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{taskResponse.Id}", JsonOptions);
         Assert.NotNull(closedDetail);
-        Assert.Equal(0, closedDetail!.CommentCount);
-        Assert.All(closedDetail.Shots, shot =>
-        {
-            Assert.Equal(0, shot.FeedbackCount);
-            Assert.Null(shot.LatestFeedbackId);
-        });
+        Assert.Equal(1, closedDetail!.CommentCount);
+        Assert.Contains(closedDetail.Shots, shot => shot.FeedbackCount > 0 && shot.LatestFeedbackId.HasValue);
 
         var lensAfter = await adminClient.GetFromJsonAsync<LensResponse>($"/api/lenses/{lensA.Id}", JsonOptions);
         Assert.NotNull(lensAfter);
-        Assert.Equal("READY_FOR_REVIEW", lensAfter!.InternalReviewStatusCode);
-        Assert.Equal(0, lensAfter.PendingDirectorFeedbackCount);
+        Assert.NotEqual("READY_FOR_REVIEW", lensAfter!.InternalReviewStatusCode);
+        Assert.NotEqual(0, lensAfter.PendingDirectorFeedbackCount);
     }
 
     [Fact]
@@ -448,13 +450,13 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
                 firstTask.Shots[0].Id),
             JsonOptions);
 
-        await adminClient.PostAsJsonAsync($"/api/review-tasks/{firstTask.Id}/close", new { }, JsonOptions);
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{firstTask.Id}/close", new { }, JsonOptions);
 
         var secondTask = await CreateTaskWithShotsAsync(adminClient, project!, lens!, "review");
 
         var lensFeedbacks = await adminClient.GetFromJsonAsync<ReviewFeedbackLensResponse>($"/api/review-feedbacks/lens/{lens.Id}", JsonOptions);
         Assert.NotNull(lensFeedbacks);
-        Assert.Empty(lensFeedbacks!.Feedbacks);
+        Assert.NotEmpty(lensFeedbacks!.Feedbacks);
         Assert.Empty(lensFeedbacks.DrawingFrames);
 
         var secondDetail = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{secondTask.Id}", JsonOptions);
@@ -464,7 +466,7 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
     }
 
     [Fact]
-    public async Task Task_shot_defaults_to_review_when_participation_mode_is_omitted()
+    public async Task Task_shot_requires_explicit_participation_mode()
     {
         using var factory = CreateFactory();
         await ResetDatabaseAsync(factory);
@@ -494,12 +496,252 @@ public sealed class Batch19ReviewFeedbackAndRepairTests
             },
             JsonOptions);
 
-        response.EnsureSuccessStatusCode();
-        var task = await response.Content.ReadFromJsonAsync<ReviewTaskResponse>(JsonOptions);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
 
-        Assert.NotNull(task);
-        Assert.Single(task!.Shots);
-        Assert.Equal("review", task.Shots[0].ParticipationMode);
+    [Fact]
+    public async Task Context_shots_are_excluded_from_completion_and_feedback_statistics()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+
+        var (lensA, project) = await CreateProjectEpisodeLensAsync(adminClient, "CONTEXT-STATS");
+        var lensB = await adminClient.PostAsJsonAsync(
+            $"/api/episodes/{lensA!.EpisodeId}/lenses",
+            new LensCreateRequest("L002", "Lens 2", 2, null, null, null, null, null),
+            JsonOptions).ReadAsJsonAsync<LensResponse>(JsonOptions);
+
+        var taskResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/tasks",
+            new ReviewTaskCreateRequest(
+                project!.Code,
+                lensA.EpisodeId,
+                "Context stats task",
+                null,
+                null,
+                null,
+                [
+                    new ReviewTaskShotCreateRequest(lensA.Id, 1, lensA.VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(lensB!.Id, 2, lensB.VersionNum, "context")
+                ]),
+            JsonOptions).ReadAsJsonAsync<ReviewTaskResponse>(JsonOptions);
+
+        Assert.NotNull(taskResponse);
+        Assert.Equal(1, taskResponse!.Summary!.ShotCount);
+        Assert.Equal(0, taskResponse.Summary.PendingFeedbackCount);
+        Assert.Equal("review", taskResponse.Shots[0].ParticipationMode);
+        Assert.Equal("context", taskResponse.Shots[1].ParticipationMode);
+    }
+
+    [Fact]
+    public async Task Mixed_task_complete_ignores_context_shots_but_context_feedback_is_blocked()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+
+        var (lensA, project) = await CreateProjectEpisodeLensAsync(adminClient, "MIXED-COMPLETE");
+        var lensB = await adminClient.PostAsJsonAsync(
+            $"/api/episodes/{lensA!.EpisodeId}/lenses",
+            new LensCreateRequest("L002", "Lens 2", 2, null, null, null, null, null),
+            JsonOptions).ReadAsJsonAsync<LensResponse>(JsonOptions);
+
+        lensA = await TransitionToStatusAsync(adminClient, lensA!, "READY_FOR_REVIEW");
+
+        var taskResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/tasks",
+            new ReviewTaskCreateRequest(
+                project!.Code,
+                lensA.EpisodeId,
+                "Mixed complete task",
+                null,
+                null,
+                null,
+                [
+                    new ReviewTaskShotCreateRequest(lensA.Id, 1, lensA.VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(lensB!.Id, 2, lensB.VersionNum, "context")
+                ]),
+            JsonOptions).ReadAsJsonAsync<ReviewTaskResponse>(JsonOptions);
+
+        Assert.NotNull(taskResponse);
+
+        var detailBefore = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{taskResponse!.Id}", JsonOptions);
+        Assert.NotNull(detailBefore);
+
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{taskResponse.Id}/submit", new { }, JsonOptions);
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{taskResponse.Id}/start", new { }, JsonOptions);
+
+        var feedbackResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-feedbacks",
+            new ReviewFeedbackCreateRequest(
+                taskResponse.Id,
+                lensB.Id,
+                lensB.VersionNum,
+                null,
+                null,
+                "Context shot should be blocked",
+                null,
+                "CHANGE_REQUEST",
+                null,
+                null,
+                null,
+                null,
+                detailBefore!.Shots.First(x => x.ParticipationMode == "context").LatestFeedbackId),
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Conflict, feedbackResponse.StatusCode);
+
+        await adminClient.PostAsJsonAsync(
+            "/api/review-feedbacks",
+            new ReviewFeedbackCreateRequest(
+                taskResponse.Id,
+                lensA.Id,
+                lensA.VersionNum,
+                null,
+                null,
+                "Review shot feedback",
+                null,
+                "APPROVE",
+                null,
+                null,
+                null,
+                null,
+                detailBefore!.Shots.First(x => x.ParticipationMode == "review").LatestFeedbackId),
+            JsonOptions);
+
+        var completeResponse = await adminClient.PostAsync($"/api/review-tasks/tasks/{taskResponse.Id}/complete", new StringContent(string.Empty));
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Six_shot_mixed_task_keeps_context_read_only_and_only_review_shots_control_complete()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+
+        var (lensA, project) = await CreateProjectEpisodeLensAsync(adminClient, "MIXED-SIX-SHOT");
+        var extraLenses = new List<LensResponse>();
+        for (var i = 2; i <= 6; i++)
+        {
+            var extraLens = await adminClient.PostAsJsonAsync(
+                $"/api/episodes/{lensA!.EpisodeId}/lenses",
+                new LensCreateRequest($"L00{i}", $"Lens {i}", i, null, null, null, null, null),
+                JsonOptions).ReadAsJsonAsync<LensResponse>(JsonOptions);
+            Assert.NotNull(extraLens);
+            extraLenses.Add(extraLens!);
+        }
+
+        lensA = await TransitionToStatusAsync(adminClient, lensA!, "READY_FOR_REVIEW");
+
+        var taskResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/tasks",
+            new ReviewTaskCreateRequest(
+                project!.Code,
+                lensA.EpisodeId,
+                "Six shot mixed task",
+                null,
+                null,
+                null,
+                [
+                    new ReviewTaskShotCreateRequest(lensA.Id, 1, lensA.VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[0].Id, 2, extraLenses[0].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[1].Id, 3, extraLenses[1].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[2].Id, 4, extraLenses[2].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[3].Id, 5, extraLenses[3].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[4].Id, 6, extraLenses[4].VersionNum, "context")
+                ]),
+            JsonOptions).ReadAsJsonAsync<ReviewTaskResponse>(JsonOptions);
+
+        Assert.NotNull(taskResponse);
+        Assert.Equal(6, taskResponse!.Shots.Count);
+        Assert.Equal(5, taskResponse.Summary!.ShotCount);
+
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{taskResponse.Id}/submit", new { }, JsonOptions);
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{taskResponse.Id}/start", new { }, JsonOptions);
+
+        var detailBefore = await adminClient.GetFromJsonAsync<ReviewTaskResponse>($"/api/review-tasks/{taskResponse.Id}", JsonOptions);
+        Assert.NotNull(detailBefore);
+
+        var reviewShots = detailBefore!.Shots.Where(shot => shot.ParticipationMode == "review").ToArray();
+        var contextShot = detailBefore.Shots.First(shot => shot.ParticipationMode == "context");
+
+        var blockedContextFeedback = await adminClient.PostAsJsonAsync(
+            "/api/review-feedbacks",
+            new ReviewFeedbackCreateRequest(
+                taskResponse.Id,
+                extraLenses[4].Id,
+                extraLenses[4].VersionNum,
+                null,
+                null,
+                "Context shot feedback should be blocked",
+                null,
+                "CHANGE_REQUEST",
+                null,
+                null,
+                null,
+                null,
+                contextShot.Id),
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Conflict, blockedContextFeedback.StatusCode);
+
+        foreach (var shot in reviewShots)
+        {
+            var sourceLens = shot.LensId == lensA.Id ? lensA : extraLenses.First(extra => extra.Id == shot.LensId);
+            var decisionCode = shot.LensId == lensA.Id ? "CHANGE_REQUEST" : "APPROVE";
+            var text = shot.LensId == lensA.Id ? "Formal review shot feedback" : $"Formal review shot {shot.LensCode} approved";
+
+            var reviewFeedbackResponse = await adminClient.PostAsJsonAsync(
+                "/api/review-feedbacks",
+                new ReviewFeedbackCreateRequest(
+                    taskResponse.Id,
+                    sourceLens.Id,
+                    sourceLens.VersionNum,
+                    null,
+                    null,
+                    text,
+                    null,
+                    decisionCode,
+                    null,
+                    null,
+                    null,
+                    null,
+                    shot.Id),
+                JsonOptions);
+
+            Assert.Equal(HttpStatusCode.Created, reviewFeedbackResponse.StatusCode);
+        }
+
+        var completeResponse = await adminClient.PostAsync($"/api/review-tasks/tasks/{taskResponse.Id}/complete", new StringContent(string.Empty));
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        var blockedTaskResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/tasks",
+            new ReviewTaskCreateRequest(
+                project.Code,
+                lensA.EpisodeId,
+                "Six shot mixed task - review context blocked",
+                null,
+                null,
+                null,
+                [
+                    new ReviewTaskShotCreateRequest(lensA.Id, 1, lensA.VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[0].Id, 2, extraLenses[0].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[1].Id, 3, extraLenses[1].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[2].Id, 4, extraLenses[2].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[3].Id, 5, extraLenses[3].VersionNum, "review"),
+                    new ReviewTaskShotCreateRequest(extraLenses[4].Id, 6, extraLenses[4].VersionNum, "review")
+                ]),
+            JsonOptions).ReadAsJsonAsync<ReviewTaskResponse>(JsonOptions);
+
+        Assert.NotNull(blockedTaskResponse);
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{blockedTaskResponse!.Id}/submit", new { }, JsonOptions);
+        await adminClient.PostAsJsonAsync($"/api/review-tasks/tasks/{blockedTaskResponse.Id}/start", new { }, JsonOptions);
+
+        var blockedComplete = await adminClient.PostAsync($"/api/review-tasks/tasks/{blockedTaskResponse.Id}/complete", new StringContent(string.Empty));
+        Assert.Equal(HttpStatusCode.Conflict, blockedComplete.StatusCode);
     }
 
     [Fact]

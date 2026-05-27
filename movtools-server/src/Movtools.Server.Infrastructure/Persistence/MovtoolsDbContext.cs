@@ -34,6 +34,8 @@ public sealed class MovtoolsDbContext : DbContext
 
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
 
+    public DbSet<ReviewFeedbackRound> ReviewFeedbackRounds => Set<ReviewFeedbackRound>();
+
     public DbSet<ReviewTaskShot> ReviewTaskShots => Set<ReviewTaskShot>();
 
     public DbSet<LensRepairAttachment> LensRepairAttachments => Set<LensRepairAttachment>();

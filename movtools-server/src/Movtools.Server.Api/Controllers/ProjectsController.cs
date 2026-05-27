@@ -109,7 +109,8 @@ public static class ProjectContractsExtensions
         request.LensFolderRootPath,
         request.MaCheckPath,
         request.MovCheckPath,
-        request.LayoutCheckPath);
+        request.LayoutCheckPath,
+        request.ProjectDefaultFps);
 
     public static UpdateProjectRequest ToRequest(this ProjectUpdateRequest request) => new(
         request.Name,
@@ -132,6 +133,7 @@ public static class ProjectContractsExtensions
         result.LayoutCheckPath,
         result.LensRoots.Select(root => new ProjectScanRootResponse(root.RootId, root.Label, root.AbsolutePath, root.Priority, root.IsEnabled, root.InitExcelPath, root.FileKind)).ToArray(),
         result.LayoutRoots.Select(root => new ProjectScanRootResponse(root.RootId, root.Label, root.AbsolutePath, root.Priority, root.IsEnabled, root.InitExcelPath, root.FileKind)).ToArray(),
+        result.ProjectDefaultFps,
         result.IsArchived, result.RowVersion, result.CreatedAtUtc, result.UpdatedAtUtc);
 
     public static ProjectCreateResponse ToResponse(this ProjectCreationResult result) => new(

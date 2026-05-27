@@ -55,7 +55,8 @@ public record CreateProjectRequest(
     string? LensFolderRootPath = null,
     string? MaCheckPath = null,
     string? MovCheckPath = null,
-    string? LayoutCheckPath = null);
+    string? LayoutCheckPath = null,
+    int ProjectDefaultFps = 30);
 
 /// <summary>
 /// 创建项目初始化根目录请求
@@ -111,6 +112,7 @@ public record ProjectResult(
     string? MaCheckPath,
     string? MovCheckPath,
     string? LayoutCheckPath,
+    int ProjectDefaultFps,
     IReadOnlyList<ProjectRootResult> LensRoots,
     IReadOnlyList<ProjectRootResult> LayoutRoots);
 

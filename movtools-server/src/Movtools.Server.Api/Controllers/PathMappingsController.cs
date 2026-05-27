@@ -71,11 +71,11 @@ public sealed class PathMappingsController : ControllerBase
 
     [HttpGet("client-nodes")]
     [ProducesResponseType(typeof(ClientNodeResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<ClientNodeResponse>>> GetMyClientNodes(CancellationToken cancellationToken)
+    public Task<ActionResult<IReadOnlyList<ClientNodeResponse>>> GetMyClientNodes(CancellationToken cancellationToken)
     {
         // This would need current user context - for now return empty
         // In a full implementation, filter by current user
-        return Ok(Array.Empty<ClientNodeResponse>());
+        return Task.FromResult<ActionResult<IReadOnlyList<ClientNodeResponse>>>(Ok(Array.Empty<ClientNodeResponse>()));
     }
 
     // Path Mappings endpoints

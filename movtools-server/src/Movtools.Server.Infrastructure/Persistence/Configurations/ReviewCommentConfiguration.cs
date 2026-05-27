@@ -19,6 +19,7 @@ public sealed class ReviewCommentConfiguration : IEntityTypeConfiguration<Review
         builder.Property(x => x.AnnotatedImagePath).HasMaxLength(500);
         builder.Property(x => x.ThumbnailPath).HasMaxLength(500);
         builder.Property(x => x.AnnotationDataJson).HasColumnType("jsonb");
+        builder.Property(x => x.FeedbackRoundId).HasColumnType("uuid");
         builder.Property(x => x.DecisionCode).HasMaxLength(50);
         builder.Property(x => x.Timecode).HasMaxLength(50);
         builder.Property(x => x.TagsJson).HasColumnType("jsonb");
@@ -42,6 +43,7 @@ public sealed class ReviewCommentConfiguration : IEntityTypeConfiguration<Review
         builder.HasIndex(x => x.LensId);
         builder.HasIndex(x => x.CreatedByUserId);
         builder.HasIndex(x => x.TaskShotId);
+        builder.HasIndex(x => x.FeedbackRoundId);
 
         builder.Property(x => x.TaskShotId).HasColumnType("uuid");
     }

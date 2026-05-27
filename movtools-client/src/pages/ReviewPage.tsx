@@ -10,16 +10,20 @@ import { reviewService, lensService } from '../services/repositoryService';
 import { pathMappingService } from '../services/repositoryService';
 import { useAuthStore } from '../auth/store';
 import { useLensStore } from '../stores/lensStore';
-import { getInternalReviewStatusLabel } from '../lib/internalReview';
-import { collectDirectorFeedbackMaskPaths } from '../lib/directorFeedback';
+import { useProjectStore } from '../stores/projectStore';
+import { getInternalReviewStatusLabel, type InternalReviewStatusCode } from '../lib/internalReview';
 import { useDirectorNavigationStore } from '../stores/directorNavigationStore';
 import { AnnotationCanvas, type AnnotationPath, serializeAnnotationPaths, deserializeAnnotationPaths } from '../components/AnnotationCanvas';
 import { FeedbackCardList, buildFeedbackListItemFromDraft, buildFeedbackListItemFromSubmitted, type FeedbackListItem } from '../components/FeedbackCardList';
 import { extractPastedImages, addPendingPaths, removeItem, type ImageAttachmentItem, createPendingItemsFromPaths } from '../lib/imageAttachment';
 import { resolveImageUrl } from '../lib/imageUrl';
 import { createFeedbackRoundId, normalizeFeedbackRoundId } from '../lib/reviewFeedbackRound';
-import { clearReviewLocalShotState, createEmptyReviewLocalShotState, loadReviewLocalShotState, saveReviewLocalShotState, upsertClearFrameRecord, upsertFrameDrawingRecord } from '../lib/reviewLocalState';
+import { filterDirectorVisibleReviewTasks } from '../lib/reviewTaskVisibility';
+import { resolveReviewParticipationMode, isContextParticipationMode } from '../lib/reviewParticipationMode';
+import { clearReviewLocalShotState, clearReviewLocalShotStateForTask, createEmptyReviewLocalShotState, getOrderedLocalDrawingEvents, loadReviewLocalShotState, saveReviewLocalShotState, upsertClearFrameRecord, upsertFrameDrawingRecord } from '../lib/reviewLocalState';
 import { resolveReviewVisibleAnnotationPaths } from '../lib/reviewDrawingResolver';
+import { DEFAULT_REVIEW_PLAYBACK_FPS } from '../lib/reviewPlaybackFps';
+import { resolveProjectPlaybackFps } from '../lib/projectPlaybackFps';
 import {
   buildPlaybackItems,
   buildPlaybackItemsWithLensDetails,
@@ -32,7 +36,7 @@ import {
 } from '../lib/reviewPlayback';
 import { filterFeedbacksForShot, loadAllFeedbacksForShot } from '../lib/reviewFrameFeedback';
 
-type ReviewStatusFilter = 'all' | 'pending' | 'in-review' | 'approved' | 'rejected';
+type ReviewStatusFilter = 'all' | 'pending' | 'in-review' | 'approved' | 'rejected' | 'closed';
 type FeedbackEditorMode = 'blank' | 'draft' | 'submitted-feedback';
 type FeedbackItemPendingAction = 'create' | 'update' | 'delete';
 
@@ -89,11 +93,11 @@ function estimateFrameNumber(currentTime: number, fps: number): number {
 }
 
 // 将时间秒数格式化为帧级时间码
-function formatFrameTime(seconds: number): string {
+function formatFrameTime(seconds: number, fps: number = DEFAULT_REVIEW_PLAYBACK_FPS): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-  const f = Math.floor((seconds % 1) * 24);
+  const f = Math.floor((seconds % 1) * fps);
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
 }
@@ -102,7 +106,7 @@ type ReviewQueueState = 'unmatched' | 'pending' | 'processed';
 
 // 判断当前镜头在任务队列中的状态
 function getReviewQueueState(item: PlaybackItem): ReviewQueueState {
-  if (item.reviewParticipationMode === 'context') return 'processed';
+  if (isContextParticipationMode(resolveReviewParticipationMode(item))) return 'processed';
   if (item.internalReviewStatusCode === 'DIRECTOR_APPROVED') return 'processed';
   if ((item.feedbackCount ?? 0) <= 0) return 'unmatched';
   return 'pending';
@@ -110,7 +114,7 @@ function getReviewQueueState(item: PlaybackItem): ReviewQueueState {
 
 // 获取镜头队列状态的中文标签
 function getReviewQueueStateLabel(item: PlaybackItem): string {
-  if (item.reviewParticipationMode === 'context') return '上下文';
+  if (isContextParticipationMode(resolveReviewParticipationMode(item))) return '上下文陪审';
   const state = getReviewQueueState(item);
   switch (state) {
     case 'processed':
@@ -120,6 +124,22 @@ function getReviewQueueStateLabel(item: PlaybackItem): string {
     default:
       return '未匹配';
   }
+}
+
+function mergePlaybackItemPreservingMedia(nextItem: PlaybackItem, existingItem: PlaybackItem): PlaybackItem {
+  return {
+    ...nextItem,
+    videoSrc: existingItem.videoSrc,
+    resolvedVideoSrc: existingItem.resolvedVideoSrc,
+    resolvedSourceType: existingItem.resolvedSourceType,
+    resolvedVersionNum: existingItem.resolvedVersionNum,
+    sourceLabel: existingItem.sourceLabel,
+    sourceDescription: existingItem.sourceDescription,
+    isPlayable: existingItem.isPlayable,
+    hasPlayableMedia: existingItem.hasPlayableMedia,
+    preloadStatus: existingItem.preloadStatus,
+    playabilityStatus: existingItem.playabilityStatus,
+  };
 }
 
 const PRELOAD_AHEAD_COUNT = 2;
@@ -133,6 +153,7 @@ function generateFeedbackRoundId(): string {
 export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPageProps) {
   const { user } = useAuthStore();
   const { lenses } = useLensStore();
+  const { projects } = useProjectStore();
   const { pendingReviewTaskId, clearPendingReviewTaskId } = useDirectorNavigationStore();
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [loading, setLoading] = useState(false);
@@ -172,12 +193,21 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   // Derived
   const currentItem = useMemo(() => playbackItems[currentIndex] ?? null, [playbackItems, currentIndex]);
   const currentShots = useMemo(() => taskDetail?.shots ?? [], [taskDetail]);
-  const fps = 24;
+  const currentProject = useMemo(() => {
+    const projectId = taskDetail?.projectId ?? selectedTask?.projectId ?? null;
+    return projectId ? projects.find((project) => project.projectId === projectId) ?? null : null;
+  }, [projects, selectedTask?.projectId, taskDetail?.projectId]);
+  const fps = useMemo(() => resolveProjectPlaybackFps(currentProject), [currentProject]);
 
   const currentShotFeedbackView = useMemo(() => {
     if (!activeShotId) return null;
     return shotFeedbackViewByShotId[activeShotId] ?? null;
   }, [activeShotId, shotFeedbackViewByShotId]);
+
+  const currentShotDrawingTimeline = useMemo(
+    () => currentShotFeedbackView?.latestRoundDrawingTimeline ?? currentShotFeedbackView?.latestRoundDrawingFrames ?? [],
+    [currentShotFeedbackView],
+  );
 
   const currentShotTaskShotId = useMemo(() => playbackItems[currentIndex]?.taskShotId ?? null, [currentIndex, playbackItems]);
 
@@ -190,10 +220,10 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     return currentItem?.resolvedVersionNum || currentItem?.submitVersionNum || selectedTask?.versionNum || '—';
   }, [currentItem, selectedTask?.versionNum]);
 
-  const currentFrameNumber = useMemo(() => estimateFrameNumber(currentTime, fps), [currentTime]);
-  const currentFrameTime = useMemo(() => formatFrameTime(currentTime), [currentTime]);
+  const currentFrameNumber = useMemo(() => estimateFrameNumber(currentTime, fps), [currentTime, fps]);
+  const currentFrameTime = useMemo(() => formatFrameTime(currentTime, fps), [currentTime, fps]);
   const frameStep = useMemo(() => 1 / fps, [fps]);
-  const currentShotParticipationMode = useMemo(() => currentItem?.reviewParticipationMode ?? 'review', [currentItem]);
+  const currentShotParticipationMode = useMemo(() => resolveReviewParticipationMode(currentItem), [currentItem]);
   const isContextShot = currentShotParticipationMode === 'context';
 
   // Video source for current shot
@@ -230,6 +260,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   // Submit state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitErrors, setSubmitErrors] = useState<string[]>([]);
+  const [isCompletingTask, setIsCompletingTask] = useState(false);
 
   const [reviewAction, setReviewAction] = useState<ReviewAction | null>(null);
   const listRequestSeqRef = useRef(0);
@@ -275,8 +306,18 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
 
   // 优先使用当前镜头状态，缺失时回退到镜头库状态
   const effectiveInternalReviewStatus = useMemo(() => {
-    return currentShotInternalReviewStatus ?? activeLensDetail?.internalReviewStatusCode ?? null;
-  }, [currentShotInternalReviewStatus, activeLensDetail?.internalReviewStatusCode]);
+    const rawStatus = currentShotInternalReviewStatus ?? activeLensDetail?.internalReviewStatusCode ?? null;
+    const taskStatus = taskDetail?.status ?? selectedTask?.status ?? null;
+
+    if (
+      taskStatus === 'in-review'
+      && (rawStatus === 'READY_FOR_REVIEW' || rawStatus === 'FIX_UPDATED')
+    ) {
+      return 'IN_DIRECTOR_REVIEW';
+    }
+
+    return rawStatus;
+  }, [activeLensDetail?.internalReviewStatusCode, currentShotInternalReviewStatus, selectedTask?.status, taskDetail?.status]);
 
   const hasPendingDrawingChanges = useMemo(
     () => Boolean(localShotState && (localShotState.frameDrawingRecords.length > 0 || localShotState.clearFrameRecords.length > 0)),
@@ -300,23 +341,31 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     () => Boolean(activeShotId)
       && currentShotFeedbackView?.shotId === activeShotId
       && !isContextShot
+      && effectiveInternalReviewStatus === 'IN_DIRECTOR_REVIEW'
       && currentDrafts.length === 0
       && reviewFeedbacks.length === 0
       && !hasPendingDrawingChanges
       && !detailLoading,
-    [activeShotId, currentDrafts.length, currentShotFeedbackView?.shotId, detailLoading, hasPendingDrawingChanges, isContextShot, reviewFeedbacks.length],
+    [activeShotId, currentDrafts.length, currentShotFeedbackView?.shotId, detailLoading, effectiveInternalReviewStatus, hasPendingDrawingChanges, isContextShot, reviewFeedbacks.length],
+  );
+
+  const canResetCurrentShotToInReview = useMemo(
+    () => Boolean(activeShotId) && !isContextShot && effectiveInternalReviewStatus === 'DIRECTOR_APPROVED' && reviewAction === null,
+    [activeShotId, effectiveInternalReviewStatus, isContextShot, reviewAction],
   );
 
   const approveDisabledReason = useMemo(() => {
     if (!activeShotId) return '当前镜头未就绪';
     if (currentShotFeedbackView?.shotId !== activeShotId) return '当前镜头反馈未加载完成';
     if (isContextShot) return '上下文陪审镜头不参与正式审片结论';
+    if (effectiveInternalReviewStatus !== 'IN_DIRECTOR_REVIEW') return '当前镜头不在审片中';
+    if (effectiveInternalReviewStatus === 'DIRECTOR_APPROVED') return '当前镜头已处于内部通过状态';
     if (hasPendingDrawingChanges) return '存在待提交绘制修改时不可通过';
     if (reviewFeedbacks.length > 0 && currentDrafts.length > 0) return '存在待提交修改和反馈记录时不可通过';
     if (reviewFeedbacks.length > 0) return '存在反馈记录时不可通过';
     if (currentDrafts.length > 0) return '存在待提交反馈时不可通过';
     return undefined;
-  }, [activeShotId, currentDrafts.length, currentShotFeedbackView?.shotId, hasPendingDrawingChanges, isContextShot, reviewFeedbacks.length]);
+  }, [activeShotId, currentDrafts.length, currentShotFeedbackView?.shotId, effectiveInternalReviewStatus, hasPendingDrawingChanges, isContextShot, reviewFeedbacks.length]);
 
   const activeDraft = useMemo(
     () => drafts.find((d) => d.draftId === activeDraftId) ?? null,
@@ -340,20 +389,14 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
 
   const editorSubmittedFeedback = useMemo(() => {
     if (editorMode === 'submitted-feedback') {
-      return activeSubmittedFeedback ?? currentFrameSubmittedFeedback;
+      if (activeSubmittedFeedback && activeSubmittedFeedback.frameNumber === currentFrameNumber) {
+        return activeSubmittedFeedback;
+      }
+      return currentFrameSubmittedFeedback;
     }
 
     return currentFrameSubmittedFeedback;
   }, [activeSubmittedFeedback, currentFrameSubmittedFeedback, editorMode]);
-
-  const currentFramePlaybackAnnotationPaths = useMemo(() => resolveReviewVisibleAnnotationPaths(
-    {
-      drawingFrames: currentShotFeedbackView?.latestRoundDrawingFrames ?? editorSubmittedFeedback?.drawingFrames ?? null,
-      frameDrawingRecords: localShotState?.frameDrawingRecords ?? null,
-      clearFrameRecords: localShotState?.clearFrameRecords ?? null,
-    },
-    currentFrameNumber,
-  ), [currentFrameNumber, currentShotFeedbackView?.latestRoundDrawingFrames, editorSubmittedFeedback?.drawingFrames, localShotState?.clearFrameRecords, localShotState?.frameDrawingRecords]);
 
   const feedbackListEntries = useMemo<ReviewFeedbackListEntry[]>(() => {
     try {
@@ -419,6 +462,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     inReview: tasks.filter((t) => t.status === 'in-review').length,
     approved: tasks.filter((t) => t.status === 'approved').length,
     rejected: tasks.filter((t) => t.status === 'rejected').length,
+    closed: tasks.filter((t) => t.status === 'closed').length,
   }), [tasks]);
 
   const playbackSourceStats = useMemo(() => ({
@@ -428,7 +472,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   }), [playbackItems]);
 
   const reviewPlaybackItems = useMemo(
-    () => playbackItems.filter((item) => item.reviewParticipationMode !== 'context'),
+    () => playbackItems.filter((item) => resolveReviewParticipationMode(item) !== 'context'),
     [playbackItems],
   );
 
@@ -438,6 +482,77 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     approved: reviewPlaybackItems.filter((item) => item.internalReviewStatusCode === 'DIRECTOR_APPROVED').length,
     pending: reviewPlaybackItems.filter((item) => item.internalReviewStatusCode === 'PENDING_FEEDBACK_FIX').length,
   }), [reviewPlaybackItems]);
+
+  const taskCompletionCheck = useMemo(() => {
+    const formalShots = reviewPlaybackItems.filter((shot) => resolveReviewParticipationMode(shot) !== 'context');
+    const incompleteShots = formalShots.filter((shot) => {
+      if (shot.internalReviewStatusCode === 'DIRECTOR_APPROVED') {
+        return false;
+      }
+
+      const shotFeedbackCount = shotFeedbackViewByShotId[shot.shotId]?.feedbacks?.length ?? 0;
+      const effectiveFeedbackCount = shot.feedbackCount > 0 ? shot.feedbackCount : shotFeedbackCount;
+      return effectiveFeedbackCount <= 0;
+    });
+
+    return {
+      totalFormalShots: formalShots.length,
+      incompleteShotCount: incompleteShots.length,
+      incompleteShotLabels: incompleteShots.map((shot) => shot.lensCode),
+      canComplete: formalShots.length === 0 || incompleteShots.length === 0,
+    };
+  }, [reviewPlaybackItems, shotFeedbackViewByShotId]);
+
+  const taskCompletionDisabledReason = useMemo(() => {
+    if (!selectedTask || !taskDetail) return '当前任务未就绪';
+    if (taskCompletionCheck.canComplete) return undefined;
+    if (taskCompletionCheck.incompleteShotLabels.length > 0) {
+      return `仍有正式镜头未完成：${taskCompletionCheck.incompleteShotLabels.join('、')}`;
+    }
+    return `仍有 ${taskCompletionCheck.incompleteShotCount} 个正式镜头未完成`;
+  }, [selectedTask, taskDetail, taskCompletionCheck]);
+
+  const applyShotReviewStatus = useCallback((shotId: string, statusCode: InternalReviewStatusCode) => {
+    const statusName = getInternalReviewStatusLabel(statusCode);
+
+    setPlaybackItems((prev) => prev.map((item) => (
+      item.shotId === shotId
+        ? {
+            ...item,
+            internalReviewStatusCode: statusCode,
+            internalReviewStatusName: statusName,
+          }
+        : item
+    )));
+
+    setTaskDetail((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        shots: prev.shots.map((shot) => (
+          shot.shotId === shotId
+            ? {
+                ...shot,
+                internalReviewStatusCode: statusCode,
+                internalReviewStatusName: statusName,
+              }
+            : shot
+        )),
+      };
+    });
+
+    setCurrentLensDetail((prev) => {
+      if (!prev || prev.lens.lensId !== shotId) return prev;
+      return {
+        ...prev,
+        lens: {
+          ...prev.lens,
+          internalReviewStatusCode: statusCode,
+          internalReviewStatusName: statusName,
+        },
+      };
+    });
+  }, []);
 
   // 持久化当前镜头的本地草稿状态
   // 持久化当前镜头的本地草稿状态
@@ -685,20 +800,18 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   useEffect(() => {
     if (!selectedTask || !activeShotId) return;
 
-    const savedFrameDraft = getDraftByFrame(currentFrameNumber);
-    const sourceDraft = activeDraft && activeDraft.frameNumber === currentFrameNumber ? activeDraft : savedFrameDraft;
-
-    if (sourceDraft) {
-      setAnnotationPaths(deserializeAnnotationPaths(sourceDraft.annotationDataJson));
-      return;
-    }
-
-    setAnnotationPaths(currentFramePlaybackAnnotationPaths);
-  }, [activeDraft, activeShotId, currentFrameNumber, currentFramePlaybackAnnotationPaths, localShotState, selectedTask]);
+    setAnnotationPaths(getVisibleAnnotationPathsForFrame(currentFrameNumber));
+  }, [activeDraft, activeShotId, currentFrameNumber, localShotState, selectedTask, currentShotDrawingTimeline]);
 
   useEffect(() => {
     if (!selectedTask || !activeShotId) return;
     if (editorIsDirtyRef.current) return;
+
+    if (editorMode === 'submitted-feedback' && activeSubmittedFeedback && activeSubmittedFeedback.frameNumber !== currentFrameNumber) {
+      applyEditorSnapshot('blank', null, '');
+      setDraftImages([]);
+      return;
+    }
 
     const savedFrameDraft = getDraftByFrame(currentFrameNumber);
     const sourceDraft = activeDraft && activeDraft.frameNumber === currentFrameNumber ? activeDraft : savedFrameDraft;
@@ -777,12 +890,13 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     setLoading(true);
     try {
       const response = await reviewService.listReviewTasks({
-        status: statusFilter === 'all' ? undefined : statusFilter as 'pending' | 'in-review' | 'approved' | 'rejected',
+        status: statusFilter === 'all' ? undefined : statusFilter as 'pending' | 'in-review' | 'approved' | 'rejected' | 'closed',
       });
       if (requestSeq !== listRequestSeqRef.current) return;
       if (response.success) {
-        setTasks(response.tasks);
-        return response.tasks;
+        const visibleTasks = filterDirectorVisibleReviewTasks(response.tasks);
+        setTasks(visibleTasks);
+        return visibleTasks;
       } else {
         const errorMsg = response.error || '';
         if (errorMsg.includes('404') || errorMsg.includes('not found')) {
@@ -803,9 +917,14 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   // === Load task with shots (enters task) ===
   // 加载任务详情、镜头列表和首镜数据
   async function loadTaskWithShots(task: ReviewTask): Promise<void> {
-    setDetailLoading(true);
+      setDetailLoading(true);
 
     try {
+      const previousTaskId = selectedTask?.taskId ?? null;
+      if (previousTaskId && previousTaskId !== task.taskId) {
+        clearReviewLocalShotStateForTask(previousTaskId);
+      }
+      clearLensDetailCache();
       const detailResponse = await reviewService.getTaskDetail(task.taskId);
       if (!detailResponse.success || !detailResponse.detail) {
         setResult({ success: false, error: detailResponse.error || '获取任务详情失败' });
@@ -824,6 +943,8 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
       setDuration(0);
       setAnnotationPaths([]);
       setActiveDraftId(null);
+      setLocalShotState(null);
+      shotDurationMapRef.current = {};
 
       // Build playback items from task detail shots
       const items = await buildPlaybackItemsWithLensDetails(detailResponse.detail);
@@ -861,12 +982,12 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     if (!selectedTask) return;
     if (!playbackItems.length) return;
 
-    const taskHasContextShot = playbackItems.some((item) => item.reviewParticipationMode === 'context');
+    const taskHasContextShot = playbackItems.some((item) => resolveReviewParticipationMode(item) === 'context');
     if (!taskHasContextShot) return;
 
     const taskId = selectedTask.taskId;
     for (const item of playbackItems) {
-      if (item.reviewParticipationMode === 'context') {
+      if (resolveReviewParticipationMode(item) === 'context') {
         void clearReviewLocalShotState(taskId, item.shotId);
       }
     }
@@ -935,7 +1056,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   function handlePlay() {
     setIsPlaying(true);
     setIsPaused(false);
-    setAnnotationPaths(currentFramePlaybackAnnotationPaths);
+    setAnnotationPaths(getVisibleAnnotationPathsForFrame(currentFrameNumber));
   }
 
   // 暂停时进入可绘制状态；如果已经到达视频末尾则不重复处理
@@ -1151,11 +1272,19 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     window.alert(`文件路径：${resolveResponse.localPath}\n\n请使用系统播放器打开预览。`);
   }
 
-  // 处理导演结论操作：通过/返修/关闭任务
+  // 处理导演镜头结论操作：通过/返修
   async function handleReviewAction(action: ReviewAction): Promise<void> {
     if (!selectedTask || !activeShotId) return;
     if (isContextShot) {
-      setResult({ success: false, error: '上下文陪审镜头不支持通过/返修。' });
+      setResult({ success: false, error: '上下文陪审镜头仅支持播放与回看，不支持正式通过或返修。' });
+      return;
+    }
+    if (action === 'close') {
+      setResult({ success: false, error: '导演侧不支持直接关闭任务。' });
+      return;
+    }
+    if (action === 'approve' && effectiveInternalReviewStatus !== 'IN_DIRECTOR_REVIEW') {
+      setResult({ success: false, error: '当前镜头不在审片中，无法执行镜头通过。' });
       return;
     }
     if (action === 'approve' && !canApproveCurrentShot) {
@@ -1176,6 +1305,8 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
       const targetStatusCode = action === 'rework' ? 'PENDING_FEEDBACK_FIX' : 'DIRECTOR_APPROVED';
       const response = await lensService.updateInternalReviewStatus(targetLensId, targetStatusCode);
       if (response.success) {
+        applyShotReviewStatus(targetLensId, targetStatusCode);
+        setResult({ success: true });
         await loadSelectedLensDetail(targetLensId);
         if (action === 'rework') {
           clearReviewLocalShotState(selectedTask.taskId, targetLensId);
@@ -1191,7 +1322,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
             for (let i = 0; i < updated.length; i++) {
               const existing = prev[i];
               if (existing && updated[i]?.shotId === existing.shotId) {
-                updated[i] = { ...updated[i], ...existing };
+                updated[i] = mergePlaybackItemPreservingMedia(updated[i], existing);
               }
             }
             return updated;
@@ -1203,6 +1334,81 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
       }
     } finally {
       setReviewAction(null);
+    }
+  }
+
+  async function handleResetShotToInReview(): Promise<void> {
+    if (!selectedTask || !activeShotId) return;
+    if (isContextShot) {
+      setResult({ success: false, error: '上下文陪审镜头仅支持播放与回看，不支持重新评审。' });
+      return;
+    }
+    if (effectiveInternalReviewStatus !== 'DIRECTOR_APPROVED') {
+      setResult({ success: false, error: '当前镜头未处于内部通过状态。' });
+      return;
+    }
+
+    const confirmed = window.confirm('确认将该镜头恢复为审片中？恢复后可重新提交反馈或再次通过。');
+    if (!confirmed) return;
+
+    setReviewAction('approve');
+    try {
+      const targetLensId = activeShotId;
+      const response = await lensService.updateInternalReviewStatus(targetLensId, 'IN_DIRECTOR_REVIEW');
+      if (response.success) {
+        applyShotReviewStatus(targetLensId, 'IN_DIRECTOR_REVIEW');
+        setResult({ success: true });
+        await loadSelectedLensDetail(targetLensId);
+
+        const detailResponse = await reviewService.getTaskDetail(selectedTask.taskId);
+        if (detailResponse.success && detailResponse.detail) {
+          setTaskDetail(detailResponse.detail);
+          const items = await buildPlaybackItemsWithLensDetails(detailResponse.detail);
+          setPlaybackItems(prev => {
+            const updated = [...items];
+            for (let i = 0; i < updated.length; i++) {
+              const existing = prev[i];
+              if (existing && updated[i]?.shotId === existing.shotId) {
+                updated[i] = mergePlaybackItemPreservingMedia(updated[i], existing);
+              }
+            }
+            return updated;
+          });
+        }
+        await loadTasks();
+      } else {
+        setResult({ success: false, error: response.error || '恢复镜头审片状态失败。' });
+      }
+    } finally {
+      setReviewAction(null);
+    }
+  }
+
+  async function handleCompleteTask(): Promise<void> {
+    if (!selectedTask || !taskDetail) return;
+    if (!taskCompletionCheck.canComplete) {
+      setResult({ success: false, error: taskCompletionDisabledReason || '当前任务尚未满足审片完成条件。' });
+      return;
+    }
+
+    const confirmed = window.confirm('确认完成本轮审片？完成后该任务将进入已完成状态。');
+    if (!confirmed) return;
+
+    setIsCompletingTask(true);
+    try {
+      const response = await reviewService.completeTask(selectedTask.taskId);
+      if (response.success) {
+        setResult({ success: true });
+        await loadTasks();
+        const nextDetail = await reviewService.getTaskDetail(selectedTask.taskId);
+        if (nextDetail.success && nextDetail.detail) {
+          setTaskDetail(nextDetail.detail);
+        }
+      } else {
+        setResult({ success: false, error: response.error || '提交审片完成失败。' });
+      }
+    } finally {
+      setIsCompletingTask(false);
     }
   }
 
@@ -1232,6 +1438,18 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     return frameFeedbacks[frameFeedbacks.length - 1] ?? null;
   }
 
+  function getVisibleAnnotationPathsForFrame(frameNumber: number): AnnotationPath[] {
+    return resolveReviewVisibleAnnotationPaths(
+      {
+        drawingTimeline: currentShotDrawingTimeline,
+        frameDrawingRecords: localShotState?.frameDrawingRecords ?? null,
+        clearFrameRecords: localShotState?.clearFrameRecords ?? null,
+      },
+      frameNumber,
+      fps,
+    );
+  }
+
   function navigateToFrame(frameNumber: number): void {
     seekCurrentVideo(Math.max(0, ((frameNumber - 1) / fps) + (frameStep / 4)));
   }
@@ -1242,7 +1460,9 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
 
   function detectDrawingChanges(paths: AnnotationPath[], sourceFeedback?: ReviewFeedback | null): boolean {
     if (!sourceFeedback) return paths.length > 0;
-    return serializeAnnotationPaths(paths) !== serializeAnnotationPaths(collectDirectorFeedbackMaskPaths([sourceFeedback]));
+    const sourceTimeline = currentShotDrawingTimeline.length > 0 ? currentShotDrawingTimeline : (sourceFeedback.drawingFrames ?? []);
+    const sourcePaths = resolveReviewVisibleAnnotationPaths({ drawingTimeline: sourceTimeline }, sourceFeedback.frameNumber ?? currentFrameNumber, fps);
+    return serializeAnnotationPaths(paths) !== serializeAnnotationPaths(sourcePaths);
   }
 
   function buildDraftChangeFlags(nextCommentText: string, paths: AnnotationPath[], sourceFeedback?: ReviewFeedback | null): { hasTextChanges: boolean; hasDrawingChanges: boolean } {
@@ -1306,22 +1526,13 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   }> {
     if (!localShotState) return [];
 
-    return [
-      ...localShotState.frameDrawingRecords.map((record) => ({
-          frameNumber: record.frameNumber,
-          timestampSeconds: null,
-          timecode: null,
-          drawingStateCode: 'DRAWN' as const,
-          drawingObjectsJson: JSON.stringify(record.paths),
-        })),
-      ...localShotState.clearFrameRecords.map((record) => ({
-          frameNumber: record.frameNumber,
-          timestampSeconds: null,
-          timecode: null,
-          drawingStateCode: 'CLEAR' as const,
-          drawingObjectsJson: null,
-        })),
-    ].sort((a, b) => a.frameNumber - b.frameNumber);
+    return getOrderedLocalDrawingEvents(localShotState).map((event) => ({
+      frameNumber: event.frameNumber,
+      timestampSeconds: null,
+      timecode: null,
+      drawingStateCode: event.kind === 'clear' ? 'CLEAR' as const : 'DRAWN' as const,
+      drawingObjectsJson: event.kind === 'clear' ? null : JSON.stringify(event.paths),
+    }));
   }
 
   // 将当前编辑内容组装成草稿对象
@@ -1478,7 +1689,11 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
         }
         setActiveDraftId(draft.draftId);
         applyEditorSnapshot('draft', draft.draftId, draft.commentText);
-        setAnnotationPaths(deserializeAnnotationPaths(draft.annotationDataJson));
+        setAnnotationPaths(resolveReviewVisibleAnnotationPaths({
+          drawingTimeline: currentShotDrawingTimeline,
+          frameDrawingRecords: localShotState?.frameDrawingRecords ?? null,
+          clearFrameRecords: localShotState?.clearFrameRecords ?? null,
+        }, draft.frameNumber, fps));
         setDraftImages(createPendingItemsFromPaths([
           draft.frameImageLocalPath,
           draft.annotatedImageLocalPath,
@@ -1494,7 +1709,11 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     void (async () => {
       setActiveDraftId(null);
       applyEditorSnapshot('submitted-feedback', feedback.feedbackId, feedback.commentText || '');
-      setAnnotationPaths(collectDirectorFeedbackMaskPaths([feedback]));
+      setAnnotationPaths(resolveReviewVisibleAnnotationPaths({
+        drawingTimeline: currentShotDrawingTimeline,
+        frameDrawingRecords: localShotState?.frameDrawingRecords ?? null,
+        clearFrameRecords: localShotState?.clearFrameRecords ?? null,
+      }, feedback.frameNumber ?? currentFrameNumber, fps));
       setDraftImages(createPendingItemsFromPaths([
         feedback.frameImagePath,
         feedback.annotatedImagePath,
@@ -1578,7 +1797,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   function handleAnnotationPathsChange(paths: AnnotationPath[]): void {
     if (!localShotState || !selectedTask || !activeShotId) return;
     persistLocalShotState(upsertFrameDrawingRecord(localShotState, currentFrameNumber, paths));
-    setAnnotationPaths(paths);
+    setAnnotationPaths(getVisibleAnnotationPathsForFrame(currentFrameNumber));
   }
 
   // 清除当前帧标注
@@ -1586,7 +1805,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
   function handleClearAnnotationFrame(frameNumber: number): void {
     if (!localShotState) return;
     persistLocalShotState(upsertClearFrameRecord(localShotState, frameNumber));
-    setAnnotationPaths([]);
+    setAnnotationPaths(getVisibleAnnotationPathsForFrame(frameNumber));
   }
 
   // 从剪贴板粘贴图片附件
@@ -1703,12 +1922,23 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
         const detailResponse = await reviewService.getTaskDetail(selectedTask.taskId);
         if (detailResponse.success && detailResponse.detail) {
           setTaskDetail(detailResponse.detail);
+          const items = await buildPlaybackItemsWithLensDetails(detailResponse.detail);
+          setPlaybackItems((prev) => {
+            const updated = [...items];
+            for (let i = 0; i < updated.length; i++) {
+              const existing = prev[i];
+              if (existing && updated[i]?.shotId === existing.shotId) {
+                updated[i] = mergePlaybackItemPreservingMedia(updated[i], existing);
+              }
+            }
+            return updated;
+          });
         }
         setAnnotationPaths(resolveReviewVisibleAnnotationPaths({
-          drawingFrames: feedbackView.latestRoundDrawingFrames ?? null,
+          drawingTimeline: feedbackView.latestRoundDrawingTimeline,
           frameDrawingRecords: clearedState?.frameDrawingRecords ?? null,
           clearFrameRecords: clearedState?.clearFrameRecords ?? null,
-        }, submittingFrameNumber));
+        }, submittingFrameNumber, fps));
       }
     }
   }
@@ -1774,6 +2004,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
         <article className="review-stat-card"><span className="review-stat-label">审阅中</span><strong>{stats.inReview}</strong></article>
         <article className="review-stat-card approved"><span className="review-stat-label">已通过</span><strong>{stats.approved}</strong></article>
         <article className="review-stat-card rejected"><span className="review-stat-label">已返修</span><strong>{stats.rejected}</strong></article>
+        <article className="review-stat-card"><span className="review-stat-label">已关闭</span><strong>{stats.closed}</strong></article>
       </div>
 
       <div className="review-stats-grid">
@@ -1788,7 +2019,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
           <div className="section-heading">
             <div>
               <h3>审片任务队列</h3>
-              <p className="muted">从这里进入审片，选择任务后会在下方展开播放器与反馈区。</p>
+              <p className="muted">这里只显示已正式提交的任务，选择后会在下方展开播放器与反馈区。</p>
             </div>
             <div className="filter-bar review-filter-bar">
               <button className={statusFilter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setStatusFilter('all')} type="button">全部 ({stats.total})</button>
@@ -1796,6 +2027,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
               <button className={statusFilter === 'in-review' ? 'tab-button active' : 'tab-button'} onClick={() => setStatusFilter('in-review')} type="button">审阅中 ({stats.inReview})</button>
               <button className={statusFilter === 'approved' ? 'tab-button active' : 'tab-button'} onClick={() => setStatusFilter('approved')} type="button">通过 ({stats.approved})</button>
               <button className={statusFilter === 'rejected' ? 'tab-button active' : 'tab-button'} onClick={() => setStatusFilter('rejected')} type="button">返修 ({stats.rejected})</button>
+              <button className={statusFilter === 'closed' ? 'tab-button active' : 'tab-button'} onClick={() => setStatusFilter('closed')} type="button">已关闭 ({stats.closed})</button>
             </div>
           </div>
 
@@ -1823,6 +2055,17 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                   </div>
                   <div className="actions-row compact-actions">
                     <button className="primary-button" onClick={(e) => { e.stopPropagation(); void handleEnterTask(task); }} type="button">进入审片</button>
+                    {selectedTask?.taskId === task.taskId ? (
+                      <button
+                        className="secondary-button"
+                        disabled={isCompletingTask || !taskCompletionCheck.canComplete}
+                        onClick={(e) => { e.stopPropagation(); void handleCompleteTask(); }}
+                        title={taskCompletionDisabledReason}
+                        type="button"
+                      >
+                        {isCompletingTask ? '完成中…' : '审片完成'}
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -1882,11 +2125,11 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                       >
                         <span className="review-queue-button__title">
                           <strong>#{index + 1} {item.lensCode}</strong>
-                          {item.reviewParticipationMode === 'context' ? <span className="review-queue-state">上下文</span> : null}
+                        {resolveReviewParticipationMode(item) === 'context' ? <span className="review-queue-state">上下文陪审</span> : null}
                           <span className="review-queue-state">{getReviewQueueStateLabel(item)}</span>
                         </span>
                         <span className="review-queue-button__meta">
-                          <small className="muted">反馈 {item.feedbackCount} 条</small>
+                          <small className="muted">{item.internalReviewStatusCode === 'DIRECTOR_APPROVED' ? '已内部通过' : `反馈 ${item.feedbackCount} 条`}</small>
                           <small className="muted">{item.internalReviewStatusName || getInternalReviewStatusLabel(item.internalReviewStatusCode)}</small>
                         </span>
                       </button>
@@ -2048,7 +2291,8 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                   </div>
                   {isContextShot ? (
                     <div className="feedback-editor feedback-editor--readonly">
-                      <p className="muted">上下文陪审镜头仅用于播放与衔接参考，不提供反馈编辑与提交。</p>
+                      <strong>上下文陪审镜头</strong>
+                      <p className="muted">仅用于播放与衔接参考，不参与反馈、通过、返修和任务完成统计。</p>
                     </div>
                   ) : (
                     <div className="feedback-editor" onPaste={handlePasteDraftImages}>
@@ -2067,9 +2311,9 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                       </label>
                       <div className="feedback-editor-actions">
                         <button className="primary-button" onClick={handleSaveDraft} disabled={!isEditorSubmittable(draftCommentText, annotationPaths, editorSubmittedFeedback)} type="button">
-                          {activeDraftId || editorMode === 'submitted-feedback' ? '更新草稿' : '保存为草稿'}
+                          {editorMode === 'draft' || editorMode === 'submitted-feedback' ? '更新草稿' : '保存为草稿'}
                         </button>
-                        {activeDraftId || editorMode === 'submitted-feedback' ? (
+                        {editorMode === 'draft' || editorMode === 'submitted-feedback' ? (
                           <button className="secondary-button" onClick={() => {
                             startNewDraft();
                           }} type="button">
@@ -2105,7 +2349,8 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                   </div>
                   {isContextShot ? (
                     <div className="feedback-card-list-empty">
-                      <p className="muted">上下文陪审镜头没有正式反馈卡片操作。</p>
+                      <strong>上下文陪审镜头</strong>
+                      <p className="muted">不展示正式反馈列表。</p>
                     </div>
                   ) : (
                     <FeedbackCardList
@@ -2124,6 +2369,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                     <small className="muted">
                       {isContextShot ? '上下文陪审镜头不参与正式反馈、通过或返修。' : '提交反馈会统一处理新增、更新、删除与绘制修改；当前镜头无反馈且无待提交修改时才可执行“镜头通过”。'}
                     </small>
+                    {isContextShot ? <small className="muted">当前镜头仅可播放与回看，正式操作已禁用。</small> : null}
                   </div>
                   <div className="submit-feedback-actions">
                     {!isContextShot ? <button
@@ -2134,15 +2380,28 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                     >
                       {isSubmitting ? '提交中…' : `提交反馈（${pendingDraftsCount}${hasPendingDrawingChanges ? ' + 绘制' : ''}）`}
                     </button> : null}
-                    {!isContextShot ? <button
-                      className="primary-button"
-                      disabled={reviewAction !== null || !canApproveCurrentShot}
-                      onClick={() => void handleReviewAction('approve')}
-                      title={approveDisabledReason}
-                      type="button"
-                    >
-                      镜头通过
-                    </button> : null}
+                    {!isContextShot ? (
+                      effectiveInternalReviewStatus === 'DIRECTOR_APPROVED'
+                        ? <button
+                          className="secondary-button"
+                          disabled={!canResetCurrentShotToInReview}
+                          onClick={() => void handleResetShotToInReview()}
+                          title={canResetCurrentShotToInReview ? undefined : '当前镜头不可恢复为审片中'}
+                          type="button"
+                        >
+                          重新评审
+                        </button>
+                        : <button
+                          className="primary-button"
+                          disabled={reviewAction !== null || !canApproveCurrentShot}
+                          onClick={() => void handleReviewAction('approve')}
+                          title={approveDisabledReason}
+                          type="button"
+                        >
+                          镜头通过
+                        </button>
+                    ) : null}
+                    {isContextShot ? <span className="muted">上下文陪审镜头不显示提交、通过或重新评审按钮。</span> : null}
                   </div>
                 </div>
                 {submitErrors.length > 0 ? (
@@ -2165,7 +2424,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                   <article className="review-meta-card">
                     <span className="lens-summary-label">反馈状态</span>
                     <strong>{isContextShot ? '上下文陪审镜头不统计正式反馈' : (reviewTaskStats.feedback > 0 ? `已提交 ${reviewTaskStats.feedback} 条正式反馈` : '暂无正式反馈记录')}</strong>
-                    <small className="muted">{isContextShot ? '上下文陪审镜头仅参与播放，不计入正式审片统计' : (approveDisabledReason || `正式镜头待处理 ${reviewTaskStats.pending} 个`)}</small>
+                    <small className="muted">{isContextShot ? '上下文陪审镜头仅参与播放，不计入正式审片统计' : (effectiveInternalReviewStatus === 'DIRECTOR_APPROVED' ? '当前镜头已内部通过，可点“重新评审”恢复为审片中' : (approveDisabledReason || `正式镜头待处理 ${reviewTaskStats.pending} 个`))}</small>
                   </article>
                   <article className="review-meta-card">
                     <span className="lens-summary-label">当前素材来源</span>
@@ -2173,7 +2432,7 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
                     <small className="muted">{currentItem?.resolvedSourceType === 'layout' ? '当前素材来源：Layout 补位' : currentItem?.resolvedSourceType === 'none' ? '当前素材来源：无可播放素材' : '当前素材来源：版本视频'}</small>
                   </article>
                 </div>
-                <p className="muted review-footer-note">{isContextShot ? '上下文陪审镜头不参与通过/返修和待处理统计。' : '当前任务无草稿且反馈列表为 0 时才允许执行镜头通过。'}</p>
+                <p className="muted review-footer-note">{isContextShot ? '上下文陪审镜头仅参与陪审播放，不参与通过、返修和任务完成统计。' : (effectiveInternalReviewStatus === 'DIRECTOR_APPROVED' ? '当前镜头已内部通过；如需重审，可点击“重新评审”恢复为审片中。' : '当前任务无草稿且反馈列表为 0 时才允许执行镜头通过。')}</p>
               </div>
             </>
           ) : (

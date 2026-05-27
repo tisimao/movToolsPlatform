@@ -15,6 +15,7 @@ export interface RemoteProjectResponse {
   name: string;
   description?: string | null;
   projectRootPath?: string | null;
+  projectDefaultFps?: number | null;
   versionTag: string;
   layoutTag: string;
   lensRoots?: RemoteRootResponse[];

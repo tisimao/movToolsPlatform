@@ -30,6 +30,7 @@ export interface IProjectRepository {
   createProject(request: {
     projectName: string;
     projectRootPath: string;
+    projectDefaultFps?: number;
     initialEpisodeCode?: string;
     initialEpisodeName?: string;
     initExcelPath?: string;
@@ -267,6 +268,9 @@ export interface IReviewRepository {
 
   /** 导演开始任务 */
   startTask(taskId: string): Promise<ReviewTaskActionResponse>;
+
+  /** 导演完成任务 */
+  completeTask(taskId: string): Promise<ReviewTaskActionResponse>;
 
   /** 关闭任务 */
   closeTask(taskId: string): Promise<ReviewTaskActionResponse>;

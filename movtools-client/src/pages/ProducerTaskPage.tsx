@@ -8,14 +8,17 @@ import { useProjectStore } from '../stores/projectStore';
 import { getInternalReviewStatusLabel, type InternalReviewStatusCode } from '../lib/internalReview';
 import { useDirectorNavigationStore } from '../stores/directorNavigationStore';
 import { clearReviewLocalShotStateForTask } from '../lib/reviewLocalState';
+import { getParticipationModeLabel, resolveReviewParticipationMode } from '../lib/reviewParticipationMode';
 import type { ReviewTaskSummary, ReviewTaskDetail, ReviewTaskShot, ReviewParticipationMode } from '../types/review';
 import type { LensRecord } from '../types/lens';
 
+// 制片审片任务页面属性
 interface ProducerTaskPageProps {
-  onOpenReviewTask: (taskId: string) => void;
-  initialTaskId?: string | null;
+  onOpenReviewTask: (taskId: string) => void;  // 打开审片任务回调
+  initialTaskId?: string | null;  // 初始选中的任务ID
 }
 
+// API用户条目
 interface ApiUserItem {
   userId: string;
   userName: string;
@@ -24,9 +27,12 @@ interface ApiUserItem {
   isActive: boolean;
 }
 
+// 任务列表筛选标签
 type TaskTabFilter = 'all' | 'draft' | 'pending' | 'in-review' | 'completed' | 'closed';
+// 镜头池筛选条件
 type ShotPoolFilter = 'all' | 'ready-for-review' | 'fix-updated' | 'no-media';
 
+// 制片端任务状态中文标签映射
 const PRODUCER_STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   'pending-submit': '待提交',
@@ -36,17 +42,25 @@ const PRODUCER_STATUS_LABELS: Record<string, string> = {
   closed: '已关闭',
 };
 
+// 获取制片端状态（优先使用producerStatus）
 function getProducerStatus(task: ReviewTaskSummary): string {
   return task.producerStatus ?? task.status;
 }
 
+// 获取制片端状态中文标签
 function getProducerStatusLabel(task: ReviewTaskSummary): string {
   return PRODUCER_STATUS_LABELS[getProducerStatus(task)] ?? task.status;
 }
 
+// 格式化日期时间为中文格式
 function formatDateTime(value?: string | null): string {
   if (!value) return '—';
   return new Date(value).toLocaleString('zh-CN');
+}
+
+// 获取镜头的参与模式（上下文陪审/正常审片）
+function getTaskShotParticipationMode(shot: { participationMode?: ReviewParticipationMode | null; reviewParticipationMode?: ReviewParticipationMode | null }): ReviewParticipationMode | null {
+  return resolveReviewParticipationMode(shot);
 }
 
 export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTaskPageProps) {
@@ -55,58 +69,72 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
   const { lenses, activeEpisodeId, activeEpisodeCode } = useLensStore();
   const { projects, activeProjectId } = useProjectStore();
   const { clearPendingReviewTaskId } = useDirectorNavigationStore();
+  // 当前活跃项目名称
   const activeProjectName = useMemo(() => projects.find((p) => p.projectId === activeProjectId)?.projectName ?? null, [projects, activeProjectId]);
   const isProducer = currentRole === 'producer';
+  // 镜头ID到镜头记录的映射
   const lensById = useMemo(() => new Map(lenses.map((lens) => [lens.lensId, lens] as const)), [lenses]);
 
+  // 任务列表状态
   const [tasks, setTasks] = useState<ReviewTaskSummary[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ReviewTaskSummary | null>(null);
   const [taskDetail, setTaskDetail] = useState<ReviewTaskDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [result, setResult] = useState<{ success: boolean; error?: string }>({ success: true });
+  // 任务列表筛选标签
   const [taskTabFilter, setTaskTabFilter] = useState<TaskTabFilter>('all');
+  // 表单显隐控制
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  // 镜头池筛选条件
   const [shotPoolFilter, setShotPoolFilter] = useState<ShotPoolFilter>('all');
 
-  // Create/Edit form state
-  const [formTaskName, setFormTaskName] = useState('');
-  const [formDirectorId, setFormDirectorId] = useState('');
-  const [formDescription, setFormDescription] = useState('');
-  const [formSelectedShotIds, setFormSelectedShotIds] = useState<string[]>([]);
-  const [formShotModes, setFormShotModes] = useState<Record<string, ReviewParticipationMode>>({});
-  const [directorUsers, setDirectorUsers] = useState<Array<{ userId: string; displayName: string; userName: string }>>([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // 创建/编辑表单状态
+  const [formTaskName, setFormTaskName] = useState('');  // 任务名称
+  const [formDirectorId, setFormDirectorId] = useState('');  // 目标导演ID
+  const [formDescription, setFormDescription] = useState('');  // 提审说明
+  const [formSelectedShotIds, setFormSelectedShotIds] = useState<string[]>([]);  // 选中的镜头ID列表
+  const [formShotModes, setFormShotModes] = useState<Record<string, ReviewParticipationMode>>({});  // 镜头参与模式映射
+  const [directorUsers, setDirectorUsers] = useState<Array<{ userId: string; displayName: string; userName: string }>>([]);  // 可选导演列表
+  const [isSaving, setIsSaving] = useState(false);  // 保存中
+  const [isSubmitting, setIsSubmitting] = useState(false);  // 提交中
 
-  // Task shot selection for pool
+  // 镜头池选中状态
   const [poolSelectedLensIds, setPoolSelectedLensIds] = useState<string[]>([]);
 
-  // Edit form state for existing task
+  // 编辑表单状态（已有任务）
   const [editTaskShotIds, setEditTaskShotIds] = useState<string[]>([]);
   const [editTaskDetail, setEditTaskDetail] = useState<ReviewTaskDetail | null>(null);
   const [editTaskShotModes, setEditTaskShotModes] = useState<Record<string, ReviewParticipationMode>>({});
 
+  // 已归档（已关闭）的任务
+  const archivedTasks = useMemo(() => tasks.filter((task) => getProducerStatus(task) === 'closed'), [tasks]);
+  // 活跃（未关闭）的任务
+  const activeTasks = useMemo(() => tasks.filter((task) => getProducerStatus(task) !== 'closed'), [tasks]);
+  // 根据标签筛选后的任务列表
   const filteredTasks = useMemo(() => {
-    if (taskTabFilter === 'all') return tasks;
-    return tasks.filter((task) => getProducerStatus(task) === taskTabFilter || task.status === taskTabFilter);
-  }, [tasks, taskTabFilter]);
+    if (taskTabFilter === 'all') return activeTasks;
+    if (taskTabFilter === 'completed') return activeTasks.filter((task) => task.status === 'completed');
+    return activeTasks.filter((task) => getProducerStatus(task) === taskTabFilter || task.status === taskTabFilter);
+  }, [activeTasks, taskTabFilter]);
 
+  // 任务统计摘要
   const taskSummary = useMemo(() => ({
-    total: tasks.length,
-    draft: tasks.filter((t) => getProducerStatus(t) === 'draft').length,
-    pending: tasks.filter((t) => t.status === 'pending').length,
-    inReview: tasks.filter((t) => t.status === 'in-review').length,
-    completed: tasks.filter((t) => t.status === 'completed').length,
-    closed: tasks.filter((t) => getProducerStatus(t) === 'closed').length,
-  }), [tasks]);
+    total: activeTasks.length,
+    draft: activeTasks.filter((t) => getProducerStatus(t) === 'draft').length,
+    pending: activeTasks.filter((t) => t.status === 'pending').length,
+    inReview: activeTasks.filter((t) => t.status === 'in-review').length,
+    completed: activeTasks.filter((t) => t.status === 'completed').length,
+    closed: archivedTasks.length,
+  }), [activeTasks, archivedTasks]);
 
+  // 待提审镜头池（根据筛选条件过滤）
   const shotPool = useMemo(() => {
     const taskShotIds = new Set<string>();
     for (const t of tasks) {
       if (t.shotCount > 0 && (getProducerStatus(t) === 'draft')) {
-        // We don't have shot IDs from summary, so can't filter accurately without detail
+        // 摘要信息中不含镜头ID，无法精确过滤
       }
     }
     return lenses.filter((lens) => {
@@ -131,14 +159,17 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     [shotPool, shotPoolFilter],
   );
 
+  // 获取导演选项的显示文本
   function getDirectorOptionLabel(director: { displayName: string; userName: string }): string {
     return director.displayName.trim() ? `${director.displayName} (${director.userName})` : director.userName;
   }
 
+  // 获取镜头参与模式的中文标签
   function getShotModeLabel(mode?: ReviewParticipationMode): string {
-    return mode === 'context' ? '上下文陪审' : '正式审片';
+    return getParticipationModeLabel(mode);
   }
 
+  // 获取镜头的默认参与模式（有可用素材为正常审片，仅有Layout为上下文陪审）
   function getDefaultParticipationMode(lensId: string): ReviewParticipationMode {
     const lens = lensById.get(lensId);
     if (!lens) {
@@ -156,6 +187,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     return 'review';
   }
 
+  // 加载制片端任务列表
   async function loadTasks(): Promise<void> {
     if (!activeProjectId) return;
     setLoadingTasks(true);
@@ -171,6 +203,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 加载任务详情
   async function loadTaskDetail(task: ReviewTaskSummary): Promise<void> {
     setSelectedTask(task);
     setLoadingDetail(true);
@@ -186,6 +219,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 创建草稿任务
   async function handleCreateTask(): Promise<void> {
     if (!activeProjectId) {
       setResult({ success: false, error: '请先选择项目。' });
@@ -203,7 +237,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         shots: formSelectedShotIds.map((lensId, index) => ({
           lensId,
           sequence: index,
-          reviewParticipationMode: formShotModes[lensId] ?? getDefaultParticipationMode(lensId),
+          participationMode: formShotModes[lensId] ?? getDefaultParticipationMode(lensId),
         })),
       });
       if (response.success) {
@@ -219,6 +253,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 保存编辑后的任务信息
   async function handleSaveEditTask(): Promise<void> {
     if (!selectedTask) return;
     setIsSaving(true);
@@ -226,7 +261,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
       const nextShots = editTaskDetail?.shots.map((shot, index) => ({
         lensId: shot.shotId,
         sequence: index,
-        reviewParticipationMode: editTaskShotModes[shot.shotId] ?? shot.reviewParticipationMode ?? getDefaultParticipationMode(shot.shotId),
+        participationMode: editTaskShotModes[shot.shotId] ?? getTaskShotParticipationMode(shot) ?? getDefaultParticipationMode(shot.shotId),
         submitVersionNum: shot.submitVersionNum ?? null,
       }));
       const response = await reviewService.updateTask(selectedTask.taskId, {
@@ -248,6 +283,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 向任务添加镜头
   async function handleAddShotsToTask(taskId: string, shotIds: string[]): Promise<void> {
     if (shotIds.length === 0) return;
     try {
@@ -257,7 +293,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         shots: shotIds.map((lensId, index) => ({
           lensId,
           sequence: index,
-          reviewParticipationMode: editTaskShotModes[lensId] ?? getDefaultParticipationMode(lensId),
+          participationMode: editTaskShotModes[lensId] ?? getDefaultParticipationMode(lensId),
         })),
       });
       if (response.success) {
@@ -274,6 +310,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 从任务中移除镜头
   async function handleRemoveShot(taskId: string, taskShotId: string): Promise<void> {
     const confirmed = window.confirm('确认从该任务移除此镜头？');
     if (!confirmed) return;
@@ -292,6 +329,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 提交任务给导演进行审片
   async function handleSubmitTask(taskId: string): Promise<void> {
     const confirmed = window.confirm('确认提交该审片任务给导演？提交后，任务内处于"待提审"或"已按反馈修改"的镜头将进入"审片中"；已"内部通过"的镜头将继续保持通过态。');
     if (!confirmed) return;
@@ -311,6 +349,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 关闭审片任务
   async function handleCloseTask(taskId: string): Promise<void> {
     const confirmed = window.confirm('确认关闭该审片任务？');
     if (!confirmed) return;
@@ -330,6 +369,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }
 
+  // 重置创建表单
   function resetCreateForm(): void {
     setFormTaskName('');
     setFormDirectorId('');
@@ -338,6 +378,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     setFormShotModes({});
   }
 
+  // 打开创建任务表单
   function openCreateForm(): void {
     resetCreateForm();
     setShowCreateForm(true);
@@ -346,6 +387,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     setTaskDetail(null);
   }
 
+  // 打开编辑任务表单（填充已有数据）
   function openEditForm(task: ReviewTaskSummary, detail: ReviewTaskDetail | null): void {
     setSelectedTask(task);
     setFormTaskName(task.taskName ?? '');
@@ -356,16 +398,18 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     if (detail) {
       setEditTaskDetail(detail);
       setEditTaskShotIds(detail.shots.map((s) => s.shotId));
-      setEditTaskShotModes(Object.fromEntries(detail.shots.map((s) => [s.shotId, s.reviewParticipationMode ?? getDefaultParticipationMode(s.shotId)])));
+      setEditTaskShotModes(Object.fromEntries(detail.shots.map((s) => [s.shotId, getTaskShotParticipationMode(s) ?? 'review'])));
     }
   }
 
+  // 切换镜头池中镜头的选中状态
   function togglePoolLensSelection(lensId: string): void {
     setPoolSelectedLensIds((current) =>
       current.includes(lensId) ? current.filter((id) => id !== lensId) : [...current, lensId],
     );
   }
 
+  // 切换创建表单中镜头的选中状态
   function toggleFormShotSelection(lensId: string): void {
     setFormSelectedShotIds((current) =>
       current.includes(lensId) ? current.filter((id) => id !== lensId) : [...current, lensId],
@@ -373,6 +417,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     setFormShotModes((current) => ({ ...current, [lensId]: current[lensId] ?? getDefaultParticipationMode(lensId) }));
   }
 
+  // 切换创建表单中镜头的参与模式（上下文陪审 <-> 正常审片）
   function toggleFormShotMode(lensId: string): void {
     setFormShotModes((current) => ({
       ...current,
@@ -380,6 +425,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }));
   }
 
+  // 切换编辑表单中镜头的参与模式
   function toggleEditShotMode(lensId: string): void {
     setEditTaskShotModes((current) => ({
       ...current,
@@ -387,14 +433,17 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }));
   }
 
+  // 更新创建表单中镜头的参与模式
   function updateFormShotMode(lensId: string, mode: ReviewParticipationMode): void {
     setFormShotModes((current) => ({ ...current, [lensId]: mode }));
   }
 
+  // 更新编辑表单中镜头的参与模式
   function updateEditShotMode(lensId: string, mode: ReviewParticipationMode): void {
     setEditTaskShotModes((current) => ({ ...current, [lensId]: mode }));
   }
 
+  // 选择任务并加载详情
   const handleSelectTask = (task: ReviewTaskSummary) => {
     setSelectedTask(task);
     setShowCreateForm(false);
@@ -402,11 +451,12 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     void loadTaskDetail(task);
   };
 
+  // 切换项目时重新加载任务列表
   useEffect(() => {
     void (async () => {
       await loadTasks();
       if (initialTaskId && tasks.length === 0) {
-        // Tasks will be loaded after loadTasks completes; retry after a tick
+        // 任务加载完成后，延时重试自动选中初始任务
         setTimeout(() => {
           const found = tasks.find((t) => t.taskId === initialTaskId);
           if (found) handleSelectTask(found);
@@ -415,7 +465,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     })();
   }, [activeProjectId]);
 
-  // Auto-select task after tasks are loaded
+  // 任务列表加载完成后自动选中初始任务
   useEffect(() => {
     if (initialTaskId && tasks.length > 0) {
       const found = tasks.find((t) => t.taskId === initialTaskId);
@@ -426,6 +476,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     }
   }, [tasks, initialTaskId]);
 
+  // 加载可选导演用户列表（角色包含director的用户）
   useEffect(() => {
     if (!activeProjectId) {
       setDirectorUsers([]);
@@ -446,6 +497,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
     })();
   }, [activeProjectId]);
 
+  // 非制片角色显示无权限提示
   if (!isProducer) {
     return (
       <section className="page-layout">
@@ -458,7 +510,9 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
   }
 
   return (
+    // ===== 页面顶级容器：三栏布局（左侧任务列表 / 右侧详情面板 / 底部镜头池） =====
     <section className="page-layout stack-gap producer-task-page">
+      {/* 页面标题栏：显示当前角色上下文（项目 + 集） */}
       <header className="page-header">
         <div>
           <p className="eyebrow">审片任务</p>
@@ -470,6 +524,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         </div>
       </header>
 
+      {/* 操作结果提示条：错误信息展示（绿色成功 / 红色失败） */}
       {result.error ? (
         <div className="workbench-result-card">
           <span className="danger-copy">{result.error}</span>
@@ -477,17 +532,24 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         </div>
       ) : null}
 
+      {/*
+        ===== 左右双栏主布局 =====
+        左栏：任务列表（筛选标签 + 任务卡片 + 已关闭折叠区）
+        右栏：根据当前视图展示【创建表单】/【编辑表单】/【任务详情】/【空状态引导】
+      */}
       <div className="producer-task-layout">
-        {/* Left panel: task list */}
+        {/* ===== 左侧面板：任务列表 ===== */}
         <section className="panel stack-gap producer-task-list-panel">
+          {/* 列表头部：标题 + 新建按钮 */}
           <div className="section-heading">
             <div>
               <h3>审片任务列表</h3>
-              <p className="muted">全部 {taskSummary.total} 个任务</p>
+              <p className="muted">主工作区仅显示未关闭任务，归档任务默认折叠。</p>
             </div>
             <button className="primary-button" onClick={openCreateForm} type="button">新建任务</button>
           </div>
 
+          {/* 状态筛选标签栏：全部 / 草稿 / 待审 / 审阅中 / 已完成 */}
           <div className="filter-bar review-filter-bar">
             <button className={taskTabFilter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setTaskTabFilter('all')} type="button">全部 ({taskSummary.total})</button>
             <button className={taskTabFilter === 'draft' ? 'tab-button active' : 'tab-button'} onClick={() => setTaskTabFilter('draft')} type="button">草稿 ({taskSummary.draft})</button>
@@ -496,6 +558,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
             <button className={taskTabFilter === 'completed' ? 'tab-button active' : 'tab-button'} onClick={() => setTaskTabFilter('completed')} type="button">已完成 ({taskSummary.completed})</button>
           </div>
 
+          {/* 加载中 / 空状态 / 任务卡片列表 */}
           {loadingTasks ? (
             <p className="muted">加载中...</p>
           ) : filteredTasks.length === 0 ? (
@@ -503,11 +566,13 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
           ) : (
             <div className="review-task-list review-task-list--strip">
               {filteredTasks.map((task) => (
+                /* 单张任务卡片：点击后加载详情到右侧面板 */
                 <article
                   key={task.taskId}
                   className={selectedTask?.taskId === task.taskId ? 'review-task-card active' : 'review-task-card'}
                   onClick={() => handleSelectTask(task)}
                 >
+                  {/* 卡片头部：任务名 + 项目/导演信息 + 状态标签 */}
                   <div className="section-heading">
                     <div>
                       <h4>{task.taskName || `任务 ${task.taskId.slice(0, 8)}`}</h4>
@@ -517,6 +582,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                       {getProducerStatusLabel(task)}
                     </span>
                   </div>
+                  {/* 卡片元数据：镜头数/反馈数/通过数 + 提交人/时间 + 更新时间 */}
                   <div className="stack-gap compact-gap">
                     <small className="muted">镜头数：{task.shotCount} · 已反馈：{task.feedbackShotCount} · 通过：{task.approvedShotCount}</small>
                     <small className="muted">提交人：{task.submitterName || '—'} · 提交时间：{formatDateTime(task.submitTime)}</small>
@@ -526,12 +592,51 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
               ))}
             </div>
           )}
+
+          {/* 已关闭任务折叠区：默认收起，展开后可查看和重新选中 */}
+          <details className="lens-detail-collapsible producer-task-archive" open={false}>
+            <summary className="lens-detail-collapsible-summary">已关闭审片任务（{taskSummary.closed}）</summary>
+            {archivedTasks.length === 0 ? (
+              <p className="muted" style={{ marginTop: '0.75rem' }}>暂无已关闭审片任务。</p>
+            ) : (
+              <div className="review-task-list review-task-list--strip" style={{ marginTop: '0.75rem' }}>
+                {archivedTasks.map((task) => (
+                  <article
+                    key={task.taskId}
+                    className={selectedTask?.taskId === task.taskId ? 'review-task-card active' : 'review-task-card'}
+                    onClick={() => handleSelectTask(task)}
+                  >
+                    <div className="section-heading">
+                      <div>
+                        <h4>{task.taskName || `任务 ${task.taskId.slice(0, 8)}`}</h4>
+                        <p className="muted">{task.projectName || '—'} · {task.directorName || '未指定导演'}</p>
+                      </div>
+                      <span className={`status-pill status-${task.status}`}>
+                        {getProducerStatusLabel(task)}
+                      </span>
+                    </div>
+                    <div className="stack-gap compact-gap">
+                      <small className="muted">镜头数：{task.shotCount} · 已反馈：{task.feedbackShotCount} · 通过：{task.approvedShotCount}</small>
+                      <small className="muted">提交人：{task.submitterName || '—'} · 提交时间：{formatDateTime(task.submitTime)}</small>
+                      <small className="muted">更新：{formatDateTime(task.updatedAtUtc)}</small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </details>
         </section>
 
-        {/* Right panel: task detail / create form / edit form */}
+        {/* ===== 右侧面板：根据当前状态展示不同视图 ===== */}
         <section className="panel stack-gap producer-task-detail-panel">
+          {/*
+            视图1：创建任务表单
+            — 填写任务名称/目标导演/提审说明
+            — 从镜头池勾选要加入的镜头并设置参与模式
+          */}
           {showCreateForm ? (
             <>
+              {/* 表单头部：标题 + 取消按钮 */}
               <div className="section-heading">
                 <div>
                   <h3>新建审片任务</h3>
@@ -540,6 +645,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 <button className="secondary-button" onClick={() => setShowCreateForm(false)} type="button">取消</button>
               </div>
 
+              {/* 基本信息字段：任务名称 / 目标导演 / 提审说明 */}
               <div className="form-grid lens-form-grid">
                 <label className="field">
                   <span>任务名称</span>
@@ -561,6 +667,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 </label>
               </div>
 
+              {/* 镜头选择区域：从镜头池中勾选待加入的镜头 */}
               <div className="section-heading">
                 <h4>选择镜头加入任务</h4>
                 <p className="muted">从下方镜头池勾选要加入的镜头。</p>
@@ -570,6 +677,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                   <p className="muted">暂无可用镜头。</p>
                 ) : (
                   shotPool.map((lens) => (
+                    /* 每行：勾选框 + 镜头编码/版本/状态 + 参与模式切换按钮（仅选中后显示） */
                     <div className="checkbox-field" key={lens.lensId} style={{ padding: '4px 0', alignItems: 'center' }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1 }}>
                         <input
@@ -588,8 +696,10 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                   ))
                 )}
               </div>
+              {/* 已选镜头计数 */}
               <small className="muted">已选 {formSelectedShotIds.length} 个镜头</small>
 
+              {/* 操作按钮：创建草稿 / 取消 */}
               <div className="actions-row wrap-actions">
                 <button className="primary-button" disabled={isSaving} onClick={() => void handleCreateTask()} type="button">
                   {isSaving ? '创建中...' : '创建草稿任务'}
@@ -599,6 +709,13 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
             </>
           ) : showEditForm && selectedTask ? (
             <>
+              {/*
+                视图2：编辑任务表单
+                — 修改任务名称/目标导演/提审说明
+                — 管理任务内镜头列表（调整参与模式 / 移除）
+                — 从镜头池添加新镜头
+              */}
+              {/* 编辑头部：标题 + 完成编辑按钮 */}
               <div className="section-heading">
                 <div>
                   <h3>编辑任务：{selectedTask.taskName || selectedTask.taskId.slice(0, 8)}</h3>
@@ -607,6 +724,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 <button className="secondary-button" onClick={() => setShowEditForm(false)} type="button">完成编辑</button>
               </div>
 
+              {/* 可编辑的基本信息字段 */}
               <div className="form-grid lens-form-grid">
                 <label className="field">
                   <span>任务名称</span>
@@ -628,6 +746,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 </label>
               </div>
 
+              {/* 任务内镜头列表：序号 / 编码 / 版本 / 参与模式 / 反馈数 / 操作按钮 */}
               <div className="section-heading">
                 <h4>任务镜头列表</h4>
                 <p className="muted">任务内当前镜头顺序。</p>
@@ -637,13 +756,16 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                   <strong>{index + 1}.</strong>
                   <span>{shot.lensCode}</span>
                   <small className="muted">V{shot.submitVersionNum || shot.actualVersionNum || '—'}</small>
-                  <span className="status-pill">{getShotModeLabel(shot.reviewParticipationMode)}</span>
+                  <span className="status-pill">{getShotModeLabel(getTaskShotParticipationMode(shot) ?? 'review')}</span>
                   <span className={`status-pill status-${shot.status}`}>{shot.feedbackCount > 0 ? `${shot.feedbackCount} 反馈` : '无反馈'}</span>
-                  <button className="ghost-button" onClick={() => toggleEditShotMode(shot.shotId)} type="button">切换参与类型</button>
+                  {/* 切换参与类型（上下文陪审 <-> 正常审片），上下文陪审镜头不可切换 */}
+                  <button className="ghost-button" disabled={getTaskShotParticipationMode(shot) === 'context'} title={getTaskShotParticipationMode(shot) === 'context' ? '上下文陪审镜头仅保留只读参与类型' : undefined} onClick={() => toggleEditShotMode(shot.shotId)} type="button">切换参与类型</button>
+                  {/* 从任务中移除该镜头 */}
                   <button className="ghost-button danger-copy" onClick={() => void handleRemoveShot(selectedTask.taskId, shot.taskShotId)} type="button">移除</button>
                 </div>
               )) || <p className="muted">暂无镜头</p>}
 
+              {/* 从镜头池添加更多镜头（排除已在任务中的） */}
               <div className="section-heading" style={{ marginTop: '1rem' }}>
                 <h4>从镜头池添加镜头</h4>
               </div>
@@ -659,6 +781,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                   </label>
                 ))}
               </div>
+              {/* 操作按钮：添加选中镜头 + 保存任务信息 */}
               <div className="actions-row wrap-actions">
                 <button className="secondary-button" disabled={poolSelectedLensIds.length === 0} onClick={() => void handleAddShotsToTask(selectedTask.taskId, poolSelectedLensIds)} type="button">
                   添加选中镜头（{poolSelectedLensIds.length}）
@@ -670,6 +793,15 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
             </>
           ) : taskDetail ? (
             <>
+              {/*
+                视图3：任务详情展示（只读）
+                — 任务概览（名称/状态/描述）
+                — 统计卡片（镜头总数 / 已反馈 / 已通过）
+                — 镜头队列（每个镜头的版本/状态/反馈数）
+                — 任务元信息（时间线）
+                — 操作按钮（提交 / 编辑 / 关闭等，根据状态显示）
+              */}
+              {/* 详情头部：任务名称 + 项目/导演信息 + 状态标签 */}
               <div className="section-heading">
                 <div>
                   <h3>{taskDetail.taskName || `任务 ${taskDetail.taskId.slice(0, 8)}`}</h3>
@@ -680,14 +812,17 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 </span>
               </div>
 
+              {/* 提审说明（如有） */}
               {taskDetail.description ? <p>{taskDetail.description}</p> : null}
 
+              {/* 统计卡片：镜头总数 / 已反馈 / 已通过 */}
               <div className="review-stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
                 <article className="review-stat-card"><span className="review-stat-label">镜头总数</span><strong>{taskDetail.totalShots}</strong></article>
                 <article className="review-stat-card"><span className="review-stat-label">已反馈</span><strong>{taskDetail.feedbackShotCount}</strong></article>
                 <article className="review-stat-card approved"><span className="review-stat-label">已通过</span><strong>{taskDetail.approvedShotCount}</strong></article>
               </div>
 
+              {/* 镜头队列列表 */}
               <div className="section-heading">
                 <h4>镜头队列</h4>
                 <p className="muted">共 {taskDetail.shots.length} 个镜头</p>
@@ -695,6 +830,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
 
               <div className="review-task-list review-task-list--strip">
                 {taskDetail.shots.map((shot, index) => (
+                  /* 单个镜头卡片：序号 + 编码 + 提审版本/播放版本 + 内部状态 + 反馈数 + 素材状态 */
                   <article key={shot.taskShotId} className="review-task-card" style={{ cursor: 'default' }}>
                     <div className="section-heading">
                       <div>
@@ -714,6 +850,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 ))}
               </div>
 
+              {/* 任务时间线信息 */}
               <div className="section-heading">
                 <h4>任务信息</h4>
               </div>
@@ -726,7 +863,9 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 <small className="muted">最近更新：{formatDateTime(taskDetail.updatedAtUtc)}</small>
               </div>
 
+              {/* 根据任务状态显示不同的操作按钮组 */}
               <div className="actions-row wrap-actions">
+                {/* 草稿/待提交/待审状态：可提交给导演 + 编辑 */}
                 {(taskDetail.producerStatus === 'draft' || taskDetail.producerStatus === 'pending-submit' || taskDetail.status === 'pending') ? (
                   <>
                     <button className="primary-button" disabled={isSubmitting || taskDetail.shots.length === 0} onClick={() => void handleSubmitTask(taskDetail.taskId)} type="button">
@@ -735,18 +874,27 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                     <button className="secondary-button" onClick={() => openEditForm(selectedTask!, taskDetail)} type="button">编辑任务</button>
                   </>
                 ) : null}
+                {/* 草稿/待提交状态：编辑草稿按钮 */}
                 {(getProducerStatus(selectedTask!) === 'draft' || getProducerStatus(selectedTask!) === 'pending-submit') ? (
                   <button className="secondary-button" onClick={() => openEditForm(selectedTask!, taskDetail)} type="button">编辑草稿</button>
                 ) : null}
+                {/* 审阅中状态：引导用户去导演工作台查看 */}
                 {taskDetail.status === 'in-review' ? (
-                  <button className="secondary-button" onClick={() => onOpenReviewTask(taskDetail.taskId)} type="button">查看审片进度</button>
+                  <button className="secondary-button" onClick={() => setResult({ success: true, error: '审片进度请在导演工作台查看，制片端仅保留任务详情与关闭入口。' })} type="button">查看审片进度</button>
                 ) : null}
+                {/* 非关闭/完成状态：可手动关闭任务 */}
                 {taskDetail.status !== 'closed' && taskDetail.status !== 'completed' ? (
                   <button className="secondary-button" onClick={() => void handleCloseTask(taskDetail.taskId)} type="button">关闭任务</button>
                 ) : null}
               </div>
+              {/* 审阅中状态的提示文字 */}
+              {taskDetail.status === 'in-review' ? <p className="muted">当前任务已进入导演审片阶段，制片端仅可查看任务详情，不进入导演工作台。</p> : null}
             </>
           ) : (
+            /*
+              视图4：空状态引导
+              — 未选中任何任务时的默认占位提示
+            */
             <div className="lens-empty-state">
               <p className="muted">选择一个任务查看详情，或点击"新建任务"创建审片任务。</p>
               <small className="muted">
@@ -757,13 +905,14 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         </section>
       </div>
 
-      {/* Bottom pool: ready shots */}
+        {/* ===== 底部镜头池：待提审镜头一览（全宽横跨两栏） ===== */}
       <section className="panel stack-gap">
         <div className="section-heading">
           <div>
             <h3>待提审镜头池</h3>
             <p className="muted">可勾选后加入当前编辑的任务。</p>
           </div>
+          {/* 镜头池筛选标签：全部 / 待提审 / 已按反馈修改 / 缺素材 */}
           <div className="filter-bar review-filter-bar">
             <button className={shotPoolFilter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setShotPoolFilter('all')} type="button">全部</button>
             <button className={shotPoolFilter === 'ready-for-review' ? 'tab-button active' : 'tab-button'} onClick={() => setShotPoolFilter('ready-for-review')} type="button">待提审</button>
@@ -774,6 +923,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
         {filteredShotPool.length === 0 ? (
           <p className="muted">暂无符合条件的镜头。</p>
         ) : (
+          /* 镜头表格：勾选列（仅在编辑模式下显示）+ 镜头编号 / 版本 / 二级状态 / 制作人员 */
           <div className="lens-table-shell" style={{ maxHeight: 300, overflowY: 'auto' }}>
             <table className="lens-table">
               <thead>
@@ -789,6 +939,7 @@ export function ProducerTaskPage({ onOpenReviewTask, initialTaskId }: ProducerTa
                 {filteredShotPool.map((lens) => (
                     <tr key={lens.lensId}>
                       <td>
+                        {/* 仅在编辑模式下显示勾选框，用于批量添加到任务 */}
                         {showEditForm && selectedTask ? (
                           <input
                             checked={poolSelectedLensIds.includes(lens.lensId)}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { projectService, reviewService } from '../services/repositoryService';
 import { useDirectorNavigationStore } from '../stores/directorNavigationStore';
 import { useProjectStore } from '../stores/projectStore';
+import { filterDirectorVisibleReviewTasks } from '../lib/reviewTaskVisibility';
 import type { ProjectSummary } from '../types/project';
 import type { ReviewFeedback, ReviewTask, ReviewTaskStatus } from '../types/review';
 
@@ -10,14 +11,14 @@ interface DirectorDashboardPageProps {
   onOpenReviewTask: (taskId: string) => void;
 }
 
-type TaskFilter = 'all' | 'pending' | 'in-review' | 'completed';
+type TaskFilter = 'all' | 'pending' | 'in-review';
 
 const taskStatusLabel: Record<ReviewTaskStatus, string> = {
   pending: '待审',
   'in-review': '审阅中',
-  approved: '已完成',
-  rejected: '已完成',
-  closed: '已完成',
+  approved: '通过',
+  rejected: '返修',
+  closed: '已关闭',
   completed: '已完成',
 };
 
@@ -42,18 +43,21 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
     if (!activeProjectId) return [];
     return tasks.filter((task) => task.projectId === activeProjectId);
   }, [activeProjectId, tasks]);
+  const directorVisibleTasks = useMemo(() => filterDirectorVisibleReviewTasks(activeProjectTasks), [activeProjectTasks]);
+  const activeTasks = useMemo(() => directorVisibleTasks.filter((task) => !['approved', 'completed', 'rejected', 'closed'].includes(task.status)), [directorVisibleTasks]);
+  const archivedTasks = useMemo(() => directorVisibleTasks.filter((task) => ['approved', 'completed'].includes(task.status)), [directorVisibleTasks]);
+  const hiddenClosedCount = useMemo(() => directorVisibleTasks.filter((task) => ['rejected', 'closed'].includes(task.status)).length, [directorVisibleTasks]);
   const visibleTasks = useMemo(() => {
-    if (filter === 'all') return activeProjectTasks;
-    if (filter === 'completed') return activeProjectTasks.filter((task) => ['approved', 'rejected', 'closed'].includes(task.status));
-    return activeProjectTasks.filter((task) => task.status === filter);
-  }, [activeProjectTasks, filter]);
+    if (filter === 'all') return activeTasks;
+    return activeTasks.filter((task) => task.status === filter);
+  }, [activeTasks, filter]);
 
   const taskSummary = useMemo(() => ({
-    total: activeProjectTasks.length,
-    pending: activeProjectTasks.filter((task) => task.status === 'pending').length,
-    inReview: activeProjectTasks.filter((task) => task.status === 'in-review').length,
-    completed: activeProjectTasks.filter((task) => ['approved', 'rejected', 'closed'].includes(task.status)).length,
-  }), [activeProjectTasks]);
+    total: activeTasks.length,
+    pending: activeTasks.filter((task) => task.status === 'pending').length,
+    inReview: activeTasks.filter((task) => task.status === 'in-review').length,
+    completed: archivedTasks.length,
+  }), [activeTasks, archivedTasks]);
 
   const projectTaskSummary = useMemo(() => {
     const summary = new Map<string, { pending: number; total: number; latestSubmitTime: string | null }>();
@@ -96,7 +100,7 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
         const response = await reviewService.listReviewTasks();
         if (cancelled) return;
         if (response.success) {
-          setTasks(response.tasks);
+          setTasks(filterDirectorVisibleReviewTasks(response.tasks));
         } else {
           setTasks([]);
           setMessage(response.error ?? '加载审片任务失败。');
@@ -143,6 +147,10 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
   }
 
   function openTask(task: ReviewTask): void {
+    if (task.status === 'closed') {
+      setMessage('已关闭任务不进入导演审片工作台。');
+      return;
+    }
     setPendingReviewTaskId(task.taskId);
     setPendingLensId(task.lensId);
     onOpenReviewTask(task.taskId);
@@ -154,7 +162,7 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
         <div>
           <p className="eyebrow">仪表盘</p>
           <h2>导演仪表盘</h2>
-          <p className="muted">以审片任务为核心，项目和镜头仅作为辅助入口。</p>
+          <p className="muted">仅显示已正式提交的审片任务，项目和镜头仅作为辅助入口。</p>
         </div>
         <div className="director-dashboard-meta-grid">
           <article className="dashboard-metric-card dashboard-metric-card--compact"><span className="lens-summary-label">当前激活项目</span><strong>{activeProject?.projectName ?? '未激活'}</strong></article>
@@ -203,10 +211,9 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
             <p className="muted">开始审片 / 继续审片会直接进入审片工作台并自动选中任务。</p>
           </div>
           <div className="filter-bar review-filter-bar">
-            <button className={filter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setFilter('all')} type="button">全部 ({activeProjectTasks.length})</button>
+            <button className={filter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setFilter('all')} type="button">全部 ({activeTasks.length})</button>
             <button className={filter === 'pending' ? 'tab-button active' : 'tab-button'} onClick={() => setFilter('pending')} type="button">待审 ({taskSummary.pending})</button>
             <button className={filter === 'in-review' ? 'tab-button active' : 'tab-button'} onClick={() => setFilter('in-review')} type="button">审阅中 ({taskSummary.inReview})</button>
-            <button className={filter === 'completed' ? 'tab-button active' : 'tab-button'} onClick={() => setFilter('completed')} type="button">已完成 ({taskSummary.completed})</button>
           </div>
         </div>
         {loadingTasks ? <p className="muted">加载中...</p> : visibleTasks.length === 0 ? <p className="muted">当前激活项目暂无审片任务。</p> : <div className="review-task-list review-task-list--strip">{visibleTasks.map((task) => (
@@ -222,9 +229,37 @@ export function DirectorDashboardPage({ onOpenLens, onOpenReviewTask }: Director
             <div className="actions-row compact-actions">
               <button className="primary-button" onClick={() => openTask(task)} type="button">{task.status === 'pending' ? '开始审片' : '继续审片'}</button>
               <button className="secondary-button" onClick={() => onOpenLens(task.lensId)} type="button">回到镜头</button>
+              <small className="muted">导演入口只进入审片工作台；context 镜头在工作台内保持只读。</small>
             </div>
           </article>
-        ))}</div>}
+          ))}</div>}
+        <details className="lens-detail-collapsible director-dashboard-archive" open={false}>
+          <summary className="lens-detail-collapsible-summary">已完成任务归档（{taskSummary.completed}）</summary>
+          {archivedTasks.length === 0 ? (
+            <p className="muted" style={{ marginTop: '0.75rem' }}>暂无已完成任务。</p>
+          ) : (
+            <div className="review-task-list review-task-list--strip" style={{ marginTop: '0.75rem' }}>
+              {archivedTasks.map((task) => (
+                <article className="review-task-card" key={task.taskId}>
+                  <div className="section-heading">
+                    <div>
+                      <h4>{task.lensCode} <small className="muted">({task.shotCount || 1} 镜头)</small></h4>
+                      <p className="muted">{task.projectName} · 提交人：{task.submitterName} · 导演：{task.reviewerName || task.assignedToUserName || '—'}</p>
+                    </div>
+                    <span className={`status-pill status-${task.status}`}>{taskStatusLabel[task.status]}</span>
+                  </div>
+                  <small className="muted">镜头数：{task.shotCount || 1} · 反馈：{task.commentCount} · 提交时间：{formatTime(task.submitTime)} · 更新：{formatTime(task.updatedAtUtc || task.reviewTime || task.submitTime)}</small>
+                  <div className="actions-row compact-actions">
+                    <button className="primary-button" onClick={() => openTask(task)} type="button">查看任务</button>
+                    <button className="secondary-button" onClick={() => onOpenLens(task.lensId)} type="button">回到镜头</button>
+                    <small className="muted">导演入口只进入审片工作台；context 镜头在工作台内保持只读。</small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </details>
+        {hiddenClosedCount > 0 ? <p className="muted">已关闭任务已从导演可见区移除。</p> : null}
       </section>
 
       <section className="panel stack-gap">

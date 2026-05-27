@@ -30,6 +30,18 @@ export interface TestResult {
  * 第五批客户端测试用例清单
  */
 export const e2eTestCases: TestCase[] = [
+  {
+    id: 'C-08-00',
+    category: '审片',
+    name: '上下文陪审只读提示',
+    steps: [
+      '1. 打开包含 context 镜头的导演任务',
+      '2. 切换到该镜头',
+      '3. 观察右侧操作区与提示',
+    ],
+    expectedResult: 'context 镜头只展示播放/回看信息，不显示正式提交、通过、返修按钮，并给出只读提示',
+    status: 'pending',
+  },
   // ========================================
   // C-08 导演审片页面与评论能力
   // ========================================

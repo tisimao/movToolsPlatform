@@ -24,6 +24,7 @@ import { collectEnabledRootPaths, getLensLayoutRootConflictMessageFromPaths } fr
 interface CreateProjectRequest {
   projectName: string;
   projectRootPath: string;
+  projectDefaultFps?: number;
   initialEpisodeCode?: string;
   initialEpisodeName?: string;
   initExcelPath?: string;
@@ -106,6 +107,7 @@ interface ProjectRegistryFile {
 interface ProjectManifest {
   projectId: string;
   projectName: string;
+  projectDefaultFps?: number;
   createdAt: string;
   updatedAt: string;
   databaseRelativePath: string;
@@ -288,6 +290,7 @@ class ProjectService {
     const manifest: ProjectManifest = {
       projectId,
       projectName,
+      projectDefaultFps: normalizeProjectDefaultFps(request.projectDefaultFps),
       createdAt: now,
       updatedAt: now,
       databaseRelativePath,
@@ -939,6 +942,7 @@ class ProjectService {
       projectId: manifest.projectId,
       projectName: manifest.projectName,
       projectRootPath,
+      projectDefaultFps: normalizeProjectDefaultFps(manifest.projectDefaultFps),
       databasePath: path.join(projectRootPath, manifest.databaseRelativePath),
       backupDir: path.join(projectRootPath, manifest.backupRelativePath),
       lensFolderRootPath: manifest.lensFolderRootPath,
@@ -1755,6 +1759,10 @@ function toScanRootItems(roots: ConfiguredScanRoot[], fileKind: 'ma' | 'layout')
     priority: root.priority,
     isEnabled: root.isEnabled,
   }));
+}
+
+function normalizeProjectDefaultFps(value?: number): number {
+  return Number.isFinite(value) && (value ?? 0) > 0 ? Math.trunc(value as number) : 30;
 }
 
 function normalizeEpisodeCode(value: string): string {

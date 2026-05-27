@@ -118,15 +118,15 @@ public static class ReviewStatuses
 {
     /// <summary>草稿</summary>
     public const string Draft = "draft";
-    /// <summary>待提交</summary>
+    /// <summary>待提交（制片装配完成，导演仍不可见）</summary>
     public const string Ready = "ready";
-    /// <summary>待审</summary>
+    /// <summary>已提交，导演可见并可开始审片</summary>
     public const string Pending = "pending";
-    /// <summary>审阅中</summary>
+    /// <summary>审片中，导演正在处理</summary>
     public const string InReview = "in-review";
-    /// <summary>已完成</summary>
+    /// <summary>导演已完成审片，等待制片关闭</summary>
     public const string Completed = "completed";
-    /// <summary>已关闭</summary>
+    /// <summary>制片归档关闭，导演不可见</summary>
     public const string Closed = "closed";
     /// <summary>兼容：进行中</summary>
     public const string InProgress = InReview;
@@ -194,7 +194,7 @@ public sealed class ReviewTaskShot : EntityBase
     public Lens Lens { get; set; } = null!;
 
     public int Sequence { get; set; }
-    public string ParticipationMode { get; set; } = ReviewTaskShotParticipationModes.Review;
+    public string ParticipationMode { get; set; } = null!;
     public string? SubmitVersionNum { get; set; }
     public string? PlayVersionNum { get; set; }
     public string Status { get; set; } = ReviewTaskShotStatuses.Unviewed;

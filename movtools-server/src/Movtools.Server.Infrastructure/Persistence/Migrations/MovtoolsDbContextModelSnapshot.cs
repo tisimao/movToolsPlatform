@@ -106,10 +106,6 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("VersionNum")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
                     b.HasKey("Id");
 
                     b.HasIndex("ClientId")
@@ -144,10 +140,6 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("VersionNum")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
 
                     b.HasKey("Id");
 
@@ -354,7 +346,7 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
-                    b.Property<Guid?>("LensId")
+                    b.Property<Guid>("LensId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("RelativePath")
@@ -539,6 +531,11 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<int>("ProjectDefaultFps")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30);
+
                     b.Property<string>("ProjectRootPath")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
@@ -619,9 +616,6 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
-                    b.Property<Guid?>("LensId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("AnnotationDataJson")
                         .HasColumnType("jsonb");
 
@@ -644,6 +638,9 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
+                    b.Property<Guid?>("FeedbackRoundId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("FrameImagePath")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
@@ -651,14 +648,17 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Property<int?>("FrameNumber")
                         .HasColumnType("integer");
 
-                    b.Property<Guid>("ReviewTaskId")
+                    b.Property<Guid?>("LensId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("TaskShotId")
+                    b.Property<Guid>("ReviewTaskId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("TagsJson")
                         .HasColumnType("jsonb");
+
+                    b.Property<Guid?>("TaskShotId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("ThumbnailPath")
                         .HasMaxLength(500)
@@ -682,6 +682,8 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("CreatedByUserId");
 
+                    b.HasIndex("FeedbackRoundId");
+
                     b.HasIndex("LensId");
 
                     b.HasIndex("ReviewTaskId");
@@ -689,6 +691,58 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.HasIndex("TaskShotId");
 
                     b.ToTable("review_comments", (string)null);
+                });
+
+            modelBuilder.Entity("Movtools.Server.Domain.Entities.ReviewFeedbackRound", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DrawingFramesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("FeedbackCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("FeedbackRoundId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LatestFeedbackAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("LensId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ReviewTaskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FeedbackRoundId")
+                        .IsUnique();
+
+                    b.HasIndex("LatestFeedbackAtUtc");
+
+                    b.HasIndex("LensId");
+
+                    b.HasIndex("ReviewTaskId", "LensId");
+
+                    b.HasIndex("ReviewTaskId", "LensId", "FeedbackRoundId")
+                        .IsUnique();
+
+                    b.ToTable("review_feedback_rounds", (string)null);
                 });
 
             modelBuilder.Entity("Movtools.Server.Domain.Entities.ReviewTask", b =>
@@ -726,7 +780,7 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("EpisodeId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("LensId")
+                    b.Property<Guid?>("LensId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Name")
@@ -795,15 +849,14 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("LensId")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("PlayVersionNum")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
                     b.Property<string>("ParticipationMode")
                         .IsRequired()
                         .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasDefaultValue("review");
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PlayVersionNum")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<Guid>("ReviewTaskId")
                         .HasColumnType("uuid");
@@ -828,6 +881,9 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.HasIndex("LensId");
 
                     b.HasIndex("ReviewTaskId");
+
+                    b.HasIndex("ReviewTaskId", "LensId")
+                        .IsUnique();
 
                     b.HasIndex("ReviewTaskId", "Sequence")
                         .IsUnique();
@@ -1048,6 +1104,24 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Navigation("Lens");
                 });
 
+            modelBuilder.Entity("Movtools.Server.Domain.Entities.LensRepairAttachment", b =>
+                {
+                    b.HasOne("Movtools.Server.Domain.Entities.Lens", "Lens")
+                        .WithMany()
+                        .HasForeignKey("LensId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Movtools.Server.Domain.Entities.LensStatusHistory", "LensStatusHistory")
+                        .WithMany()
+                        .HasForeignKey("LensStatusHistoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Lens");
+
+                    b.Navigation("LensStatusHistory");
+                });
+
             modelBuilder.Entity("Movtools.Server.Domain.Entities.LensStatusHistory", b =>
                 {
                     b.HasOne("Movtools.Server.Domain.Entities.User", "ChangedByUser")
@@ -1086,6 +1160,11 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("Movtools.Server.Domain.Entities.Lens", "Lens")
+                        .WithMany()
+                        .HasForeignKey("LensId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Movtools.Server.Domain.Entities.ReviewTask", "ReviewTask")
                         .WithMany("Comments")
                         .HasForeignKey("ReviewTaskId")
@@ -1093,6 +1172,27 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("CreatedByUser");
+
+                    b.Navigation("Lens");
+
+                    b.Navigation("ReviewTask");
+                });
+
+            modelBuilder.Entity("Movtools.Server.Domain.Entities.ReviewFeedbackRound", b =>
+                {
+                    b.HasOne("Movtools.Server.Domain.Entities.Lens", "Lens")
+                        .WithMany()
+                        .HasForeignKey("LensId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Movtools.Server.Domain.Entities.ReviewTask", "ReviewTask")
+                        .WithMany()
+                        .HasForeignKey("ReviewTaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Lens");
 
                     b.Navigation("ReviewTask");
                 });
@@ -1118,8 +1218,7 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.HasOne("Movtools.Server.Domain.Entities.Lens", "Lens")
                         .WithMany()
                         .HasForeignKey("LensId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("AssignedToUser");
 
@@ -1183,24 +1282,6 @@ namespace Movtools.Server.Infrastructure.Persistence.Migrations
                     b.Navigation("FileBindings");
 
                     b.Navigation("StatusHistories");
-                });
-
-            modelBuilder.Entity("Movtools.Server.Domain.Entities.LensRepairAttachment", b =>
-                {
-                    b.HasOne("Movtools.Server.Domain.Entities.Lens", "Lens")
-                        .WithMany()
-                        .HasForeignKey("LensId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Movtools.Server.Domain.Entities.LensStatusHistory", "LensStatusHistory")
-                        .WithMany()
-                        .HasForeignKey("LensStatusHistoryId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Lens");
-
-                    b.Navigation("LensStatusHistory");
                 });
 
             modelBuilder.Entity("Movtools.Server.Domain.Entities.Project", b =>

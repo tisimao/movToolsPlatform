@@ -177,10 +177,12 @@ public sealed class AuthenticationAndManagementApiTests
         var createdProject = await producerClient.PostAsJsonAsync("/api/projects", new ProjectCreateRequest("proj-collab", "协同项目", null, "ANI", "LAY"), JsonOptions).ReadAsJsonAsync<ProjectCreateResponse>(JsonOptions);
         Assert.NotNull(createdProject);
         Assert.Equal("PROJ-COLLAB", createdProject!.Code);
+        Assert.Equal(30, createdProject.ProjectDefaultFps);
 
         var projects = await producerClient.GetFromJsonAsync<IReadOnlyList<ProjectResponse>>("/api/projects", JsonOptions);
         Assert.NotNull(projects);
         Assert.Contains(projects!, project => project.Code == "PROJ-COLLAB");
+        Assert.Contains(projects!, project => project.Code == "PROJ-COLLAB" && project.ProjectDefaultFps == 30);
     }
 
     [Fact]

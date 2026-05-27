@@ -276,6 +276,8 @@ export type UpdateSettingsRequest = Partial<AppSettings>;
 export interface CreateProjectRequest {
   projectName: string;
   projectRootPath: string;
+  /** 项目默认帧率；未填写时默认按 30 处理 */
+  projectDefaultFps?: number;
   initialEpisodeCode?: string;
   initialEpisodeName?: string;
   /** 初始化 Excel 文件路径（可选）；指定后会在创建项目时自动导入首集镜头底表 */
@@ -663,6 +665,7 @@ const scanRootConfigItemSchema = z.object({
 export const createProjectRequestSchema = z.object({
   projectName: z.string().min(1),
   projectRootPath: z.string().min(1),
+  projectDefaultFps: z.number().int().positive().optional(),
   initialEpisodeCode: z.string().optional(),
   initialEpisodeName: z.string().optional(),
   initExcelPath: z.string().optional(),

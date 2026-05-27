@@ -353,13 +353,18 @@ public sealed class LensService : ILensService
         var currentUser = _currentUserAccessor.GetCurrentUser()
             ?? throw new UnauthorizedAppException("unauthorized", "User is not authenticated.");
 
-        if (!await _permissionService.CanWriteLensAsync(lens.Episode.Project.Code, currentUser.Id, cancellationToken))
-        {
-            throw new UnauthorizedAppException("project_access_denied", "You do not have permission to modify this lens.");
-        }
-
         var currentStatus = LensInternalReviewStatuses.Normalize(lens.InternalReviewStatusCode);
         var targetStatus = LensInternalReviewStatuses.Normalize(request.TargetStatusCode);
+
+        var canWriteLens = await _permissionService.CanWriteLensAsync(lens.Episode.Project.Code, currentUser.Id, cancellationToken);
+        var canReadLens = await _permissionService.CanReadLensAsync(lens.Episode.Project.Code, currentUser.Id, lens.MakerUserId, cancellationToken);
+        var roleCode = await _permissionService.GetProjectRoleCodeAsync(lens.Episode.Project.Code, currentUser.Id, cancellationToken);
+        var isAdmin = await _permissionService.IsAdminAsync(currentUser.Id, cancellationToken);
+        var isDirector = await _permissionService.IsInRoleAsync(currentUser.Id, "director", cancellationToken);
+        var isProducer = roleCode == "producer";
+        var isMaker = roleCode == "maker";
+
+        currentStatus = await NormalizeDirectorActionSourceStatusAsync(lens, currentStatus, targetStatus, isAdmin, isDirector, cancellationToken);
 
         if (currentStatus == targetStatus)
         {
@@ -378,23 +383,24 @@ public sealed class LensService : ILensService
             throw new UnprocessableEntityAppException("invalid_internal_review_transition", $"Cannot transition from '{currentStatus}' to '{targetStatus}'.");
         }
 
-        var roleCode = await _permissionService.GetProjectRoleCodeAsync(lens.Episode.Project.Code, currentUser.Id, cancellationToken);
-        var isAdmin = await _permissionService.IsAdminAsync(currentUser.Id, cancellationToken);
-        var isDirector = await _permissionService.IsInRoleAsync(currentUser.Id, "director", cancellationToken);
-        var isProducer = roleCode == "producer";
-        var isMaker = roleCode == "maker";
+        if (!canReadLens)
+        {
+            throw new UnauthorizedAppException("project_access_denied", "You do not have permission to access this lens.");
+        }
 
-        var allowed = targetStatus switch
+        var canModify = targetStatus switch
         {
             LensInternalReviewStatuses.ReadyForReview => isAdmin || isProducer,
-            LensInternalReviewStatuses.InDirectorReview => isAdmin || isProducer,
+            LensInternalReviewStatuses.InDirectorReview => currentStatus == LensInternalReviewStatuses.DirectorApproved
+                ? isAdmin || isDirector
+                : isAdmin || isProducer,
             LensInternalReviewStatuses.PendingFeedbackFix => isAdmin || isDirector,
             LensInternalReviewStatuses.DirectorApproved => isAdmin || isDirector,
-            LensInternalReviewStatuses.FixUpdated => isAdmin || isMaker,
+            LensInternalReviewStatuses.FixUpdated => isAdmin || (isMaker && canReadLens),
             _ => false
         };
 
-        if (!allowed)
+        if (!canModify)
         {
             throw new UnauthorizedAppException("internal_review_action_denied", "You do not have permission to perform this internal review action.");
         }
@@ -413,6 +419,39 @@ public sealed class LensService : ILensService
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapToResultAsync(lens, cancellationToken);
+    }
+
+    private async Task<string> NormalizeDirectorActionSourceStatusAsync(
+        Lens lens,
+        string currentStatus,
+        string targetStatus,
+        bool isAdmin,
+        bool isDirector,
+        CancellationToken cancellationToken)
+    {
+        if (!isAdmin && !isDirector)
+        {
+            return currentStatus;
+        }
+
+        if (currentStatus is not (LensInternalReviewStatuses.NotInReview or LensInternalReviewStatuses.ReadyForReview or LensInternalReviewStatuses.FixUpdated))
+        {
+            return currentStatus;
+        }
+
+        if (targetStatus is not (LensInternalReviewStatuses.DirectorApproved or LensInternalReviewStatuses.PendingFeedbackFix))
+        {
+            return currentStatus;
+        }
+
+        var hasActiveReviewTask = await _dbContext.ReviewTaskShots
+            .AnyAsync(
+                x => x.LensId == lens.Id
+                    && x.ParticipationMode.ToLower() == ReviewTaskShotParticipationModes.Review
+                    && x.ReviewTask.Status == ReviewStatuses.InReview,
+                cancellationToken);
+
+        return hasActiveReviewTask ? LensInternalReviewStatuses.InDirectorReview : currentStatus;
     }
 
     /// <inheritdoc/>

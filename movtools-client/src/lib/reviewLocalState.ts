@@ -130,22 +130,43 @@ function clonePaths(paths: AnnotationPath[]): AnnotationPath[] {
   }));
 }
 
-export function resolveVisibleAnnotationPaths(state: ReviewLocalShotState, frameNumber: number): AnnotationPath[] {
-  const events = [
-    ...state.frameDrawingRecords
-      .filter((record) => record.frameNumber <= frameNumber)
-      .map((record) => ({ kind: 'draw' as const, frameNumber: record.frameNumber, updatedAt: record.updatedAt, paths: record.paths })),
-    ...state.clearFrameRecords
-      .filter((record) => record.frameNumber <= frameNumber)
-      .map((record) => ({ kind: 'clear' as const, frameNumber: record.frameNumber, updatedAt: record.updatedAt, paths: [] as AnnotationPath[] })),
-  ].sort((a, b) => a.frameNumber - b.frameNumber || a.updatedAt.localeCompare(b.updatedAt));
+type LocalDrawingEvent =
+  | { kind: 'draw'; frameNumber: number; updatedAt: string; paths: AnnotationPath[] }
+  | { kind: 'clear'; frameNumber: number; updatedAt: string };
 
-  let visiblePaths: AnnotationPath[] = [];
-  for (const event of events) {
-    visiblePaths = event.kind === 'clear' ? [] : clonePaths(event.paths);
+export function getOrderedLocalDrawingEvents(state: Pick<ReviewLocalShotState, 'frameDrawingRecords' | 'clearFrameRecords'>): LocalDrawingEvent[] {
+  return [
+    ...state.frameDrawingRecords.map((record) => ({ kind: 'draw' as const, frameNumber: record.frameNumber, updatedAt: record.updatedAt, paths: clonePaths(record.paths) })),
+    ...state.clearFrameRecords.map((record) => ({ kind: 'clear' as const, frameNumber: record.frameNumber, updatedAt: record.updatedAt })),
+  ].sort((left, right) => left.frameNumber - right.frameNumber || left.updatedAt.localeCompare(right.updatedAt));
+}
+
+export function resolveVisibleAnnotationPaths(state: ReviewLocalShotState, frameNumber: number): AnnotationPath[] {
+  const events = getOrderedLocalDrawingEvents(state);
+
+  const exactFrameRecord = events
+    .filter((record) => record.frameNumber === frameNumber)
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    .at(-1) ?? null;
+
+  if (exactFrameRecord) {
+    if (exactFrameRecord.kind === 'draw') {
+      return clonePaths(exactFrameRecord.paths);
+    }
+
+    return [];
   }
 
-  return visiblePaths;
+  const latestBoundary = events
+    .filter((record) => record.frameNumber < frameNumber)
+    .sort((left, right) => left.frameNumber - right.frameNumber || left.updatedAt.localeCompare(right.updatedAt))
+    .at(-1) ?? null;
+
+  if (!latestBoundary || latestBoundary.kind !== 'draw') {
+    return [];
+  }
+
+  return clonePaths(latestBoundary.paths);
 }
 
 export function upsertFrameDrawingRecord(

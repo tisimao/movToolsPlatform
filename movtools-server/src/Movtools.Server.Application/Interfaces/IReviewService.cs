@@ -74,6 +74,11 @@ public interface IReviewService
     Task<IReadOnlyList<ReviewDrawingFrameResult>> GetDrawingFramesByLensAsync(Guid lensId, Guid? feedbackRoundId = null, bool includeAllRounds = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 获取镜头反馈轮次及正式绘制时间线
+    /// </summary>
+    Task<ReviewFeedbackLensResult> GetFeedbackLensAsync(Guid lensId, Guid? feedbackRoundId = null, bool includeAllRounds = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 根据ID获取反馈卡片
     /// </summary>
     Task<ReviewCommentResult?> GetFeedbackByIdAsync(Guid feedbackId, CancellationToken cancellationToken = default);
@@ -157,13 +162,14 @@ public record UpdateReviewTaskRequest(
     string Name,
     string? Description,
     Guid? DirectorUserId,
-    DateTimeOffset? DueAtUtc);
+    DateTimeOffset? DueAtUtc,
+    IReadOnlyList<CreateReviewTaskShotRequest>? Shots);
 
 public record CreateReviewTaskShotRequest(
     Guid LensId,
     int Sequence,
     string? SubmitVersionNum,
-    string ParticipationMode = ReviewTaskShotParticipationModes.Review);
+    string ParticipationMode);
 
 public record CreateReviewCommentRequest(
     string Content,

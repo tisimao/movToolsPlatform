@@ -41,7 +41,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         Environment.SetEnvironmentVariable("Database__ConnectionString", ConnectionString);
     }
 
-    public async Task DisposeAsync()
+    public Task DisposeAsync()
     {
         if (_server is not null)
         {
@@ -50,6 +50,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         }
 
         Environment.SetEnvironmentVariable("Database__ConnectionString", null);
+        return Task.CompletedTask;
     }
 }
 

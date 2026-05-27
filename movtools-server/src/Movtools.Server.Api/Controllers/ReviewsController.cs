@@ -60,12 +60,28 @@ public sealed class ReviewsController : ControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<ReviewTaskResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ReviewTaskResponse>>> GetPendingReviews([FromQuery] string? status, CancellationToken cancellationToken)
     {
+        var currentUser = _currentUserAccessor.GetCurrentUser()
+            ?? throw new UnauthorizedAppException("unauthorized", "User is not authenticated.");
+        var isAdmin = await _permissionService.IsAdminAsync(currentUser.Id, cancellationToken);
+        var isDirector = await _permissionService.IsInRoleAsync(currentUser.Id, "director", cancellationToken);
+        if (!isAdmin && !isDirector)
+        {
+            return Forbid();
+        }
+
         var reviews = await _reviewService.GetPendingReviewsAsync(cancellationToken);
+        if (isDirector && !isAdmin)
+        {
+            reviews = reviews.Where(x => x.Status == ReviewStatuses.Pending
+                || x.Status == ReviewStatuses.InReview
+                || x.Status == ReviewStatuses.Completed).ToArray();
+        }
         if (!string.IsNullOrWhiteSpace(status))
         {
             var normalizedStatus = NormalizeDirectorListStatus(status);
             reviews = reviews.Where(x => x.Status == normalizedStatus).ToArray();
         }
+
         return Ok(reviews.Select(ToResponse).ToArray());
     }
 
@@ -87,7 +103,7 @@ public sealed class ReviewsController : ControllerBase
             .Include(x => x.DirectorUser)
             .Include(x => x.Shots)
                 .ThenInclude(x => x.Lens)
-            .AsQueryable();
+            .AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(projectId))
         {
@@ -125,8 +141,23 @@ public sealed class ReviewsController : ControllerBase
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<object>> GetTaskDetail(Guid id, CancellationToken cancellationToken)
     {
+        var currentUser = _currentUserAccessor.GetCurrentUser()
+            ?? throw new UnauthorizedAppException("unauthorized", "User is not authenticated.");
+        var isAdmin = await _permissionService.IsAdminAsync(currentUser.Id, cancellationToken);
+        var isDirector = await _permissionService.IsInRoleAsync(currentUser.Id, "director", cancellationToken);
+        var isProducer = await _permissionService.IsInRoleAsync(currentUser.Id, "producer", cancellationToken);
+        if (!isAdmin && !isDirector && !isProducer)
+        {
+            return Forbid();
+        }
+
         var review = await _reviewService.GetTaskDetailAsync(id, cancellationToken);
         if (review == null)
+        {
+            return NotFound(new ApiErrorResponse("not_found", "review_not_found", "The review task could not be found.", null, null));
+        }
+
+        if (isDirector && !isAdmin && review.Status is ReviewStatuses.Draft or ReviewStatuses.Ready)
         {
             return NotFound(new ApiErrorResponse("not_found", "review_not_found", "The review task could not be found.", null, null));
         }
@@ -139,11 +170,26 @@ public sealed class ReviewsController : ControllerBase
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ReviewTaskResponse>> GetById(Guid id, CancellationToken cancellationToken)
     {
+        var currentUser = _currentUserAccessor.GetCurrentUser()
+            ?? throw new UnauthorizedAppException("unauthorized", "User is not authenticated.");
+        var isAdmin = await _permissionService.IsAdminAsync(currentUser.Id, cancellationToken);
+        var isDirector = await _permissionService.IsInRoleAsync(currentUser.Id, "director", cancellationToken);
+        var isProducer = await _permissionService.IsInRoleAsync(currentUser.Id, "producer", cancellationToken);
+        if (!isAdmin && !isDirector && !isProducer)
+        {
+            return Forbid();
+        }
+
         var review = await _reviewService.GetByIdAsync(id, cancellationToken);
         if (review == null)
         {
             return NotFound(new ApiErrorResponse("not_found", "review_not_found", "The review task could not be found.", null, null));
         }
+        if (isDirector && !isAdmin && review.Status is ReviewStatuses.Draft or ReviewStatuses.Ready)
+        {
+            return NotFound(new ApiErrorResponse("not_found", "review_not_found", "The review task could not be found.", null, null));
+        }
+
         return Ok(ToResponse(review));
     }
 
@@ -159,18 +205,19 @@ public sealed class ReviewsController : ControllerBase
     [ProducesResponseType(typeof(ReviewFeedbackLensResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ReviewFeedbackLensResponse>> GetByLens(Guid lensId, [FromQuery] Guid? feedbackRoundId, [FromQuery] bool includeAllRounds = false, CancellationToken cancellationToken = default)
     {
-        var reviews = await _reviewService.GetFeedbacksByLensAsync(lensId, feedbackRoundId, includeAllRounds, cancellationToken);
-        var drawingFrames = await _reviewService.GetDrawingFramesByLensAsync(lensId, feedbackRoundId, includeAllRounds, cancellationToken);
-        var latestFeedbackRoundId = reviews.FirstOrDefault()?.FeedbackRoundId;
-        var latestFeedbackAtUtc = reviews.FirstOrDefault()?.CreatedAtUtc;
+        var lensFeedback = await _reviewService.GetFeedbackLensAsync(lensId, feedbackRoundId, includeAllRounds, cancellationToken);
 
         return Ok(new ReviewFeedbackLensResponse(
             lensId,
-            latestFeedbackRoundId,
-            latestFeedbackAtUtc,
-            reviews.Select(ToFeedbackResponse).ToArray(),
-            drawingFrames.Select(ToDrawingFrameResponse).ToArray(),
-            latestFeedbackRoundId.HasValue ? new ReviewFeedbackRoundResponse(latestFeedbackRoundId.Value, latestFeedbackAtUtc ?? DateTimeOffset.UtcNow, reviews.Count, drawingFrames.Select(ToDrawingFrameResponse).ToArray()) : null,
+            lensFeedback.LatestFeedbackRoundId,
+            lensFeedback.LatestFeedbackAtUtc,
+            lensFeedback.Feedbacks.Select(ToFeedbackResponse).ToArray(),
+            lensFeedback.DrawingFrames.Select(ToDrawingFrameResponse).ToArray(),
+            lensFeedback.LatestRound is null ? null : new ReviewFeedbackRoundResponse(
+                lensFeedback.LatestRound.FeedbackRoundId,
+                lensFeedback.LatestRound.CreatedAtUtc,
+                lensFeedback.LatestRound.FeedbackCount,
+                lensFeedback.LatestRound.DrawingTimeline.Select(ToDrawingFrameResponse).ToArray()),
             includeAllRounds));
     }
 
@@ -202,7 +249,7 @@ public sealed class ReviewsController : ControllerBase
         return Ok(ToResponse(result));
     }
 
-    [HttpPost("{id:guid}/close")]
+    [HttpPost("/api/reviews/{id:guid}/close")]
     [ProducesResponseType(typeof(ReviewTaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
@@ -421,7 +468,9 @@ public sealed class ReviewsController : ControllerBase
             return BadRequest(new ApiErrorResponse("validation", "project_id_required", "Project ID is required.", null, null));
         }
 
-        var shotRequests = await BuildShotRequestsAsync(request.ShotIds, cancellationToken);
+        var shotRequests = request.Shots is { Count: > 0 }
+            ? request.Shots.Select(s => new CreateReviewTaskShotRequest(s.LensId, s.Sequence, s.SubmitVersionNum, s.ParticipationMode)).ToArray()
+            : await BuildShotRequestsAsync(request.ShotIds, cancellationToken);
         var taskName = string.IsNullOrWhiteSpace(request.TaskName)
             ? BuildDefaultTaskName(request.ProjectId, request.EpisodeId, shotRequests.Count)
             : request.TaskName.Trim();
@@ -448,7 +497,8 @@ public sealed class ReviewsController : ControllerBase
             request.Name,
             request.Description,
             request.DirectorUserId,
-            request.DueAtUtc), cancellationToken);
+            request.DueAtUtc,
+            request.Shots?.Select(s => new CreateReviewTaskShotRequest(s.LensId, s.Sequence, s.SubmitVersionNum, s.ParticipationMode)).ToArray()), cancellationToken);
 
         return Ok(ToResponse(result));
     }
@@ -475,7 +525,8 @@ public sealed class ReviewsController : ControllerBase
             taskName,
             request.Description,
             request.DirectorId,
-            request.DeadlineUtc), cancellationToken);
+            request.DeadlineUtc,
+            request.Shots?.Select(s => new CreateReviewTaskShotRequest(s.LensId, s.Sequence, s.SubmitVersionNum, s.ParticipationMode)).ToArray()), cancellationToken);
 
         return Ok(ToProducerTaskSummary(result));
     }
@@ -513,6 +564,7 @@ public sealed class ReviewsController : ControllerBase
     }
 
     [HttpPost("tasks/{id:guid}/complete")]
+    [HttpPost("{id:guid}/complete")]
     [ProducesResponseType(typeof(ReviewTaskResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ReviewTaskResponse>> CompleteTask(Guid id, CancellationToken cancellationToken)
     {
@@ -819,6 +871,7 @@ public sealed class ReviewsController : ControllerBase
             shotId = shot.LensId,
             lensCode = shot.LensCode,
             sortOrder = shot.Sequence,
+            reviewParticipationMode = shot.ParticipationMode,
             participationMode = shot.ParticipationMode,
             submitVersionNum = shot.SubmitVersionNum,
             actualVersionNum = shot.PlayVersionNum,
@@ -832,7 +885,9 @@ public sealed class ReviewsController : ControllerBase
         };
 
     private static string MapTaskShotStatus(ReviewTaskShotResult shot)
-        => shot.Status switch
+        => !string.Equals(shot.ParticipationMode, ReviewTaskShotParticipationModes.Review, StringComparison.OrdinalIgnoreCase)
+            ? "context"
+            : shot.Status switch
         {
             ReviewTaskShotStatuses.Done when string.Equals(shot.LensInternalReviewStatusCode, LensInternalReviewStatuses.DirectorApproved, StringComparison.OrdinalIgnoreCase) => "approved",
             ReviewTaskShotStatuses.Done => "approved",

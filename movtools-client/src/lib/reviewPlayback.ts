@@ -13,6 +13,7 @@ import type { ReviewTaskDetail, ReviewTaskShot } from '../types/review';
 import type { LensDetailPayload } from '../types/lens';
 import { lensService } from '../services/repositoryService';
 import { loadAllFeedbacksForShot } from './reviewFrameFeedback';
+import { resolveReviewParticipationMode } from './reviewParticipationMode';
 
 /** 镜头详情缓存（减少重复拉取） */
 const lensDetailCache = new Map<string, LensDetailPayload>();
@@ -161,6 +162,7 @@ export function resolvePlaybackSource(shot: PlaybackSourceProbe, lensDetail?: Le
 
 function buildResolvedPlaybackItem(shot: ReviewTaskShot, lensDetail?: LensDetailPayload | null): PlaybackItem {
   const resolved = resolvePlaybackSource(shot, lensDetail);
+  const participationMode = resolveReviewParticipationMode(shot);
   return {
     shotId: shot.shotId,
     taskShotId: shot.taskShotId,
@@ -178,6 +180,7 @@ function buildResolvedPlaybackItem(shot: ReviewTaskShot, lensDetail?: LensDetail
     hasPlayableMedia: resolved.hasPlayableMedia,
     preloadStatus: resolved.isPlayable ? 'idle' : 'error',
     feedbackCount: shot.feedbackCount ?? 0,
+    reviewParticipationMode: participationMode ?? undefined,
     playabilityStatus: resolved.isPlayable ? 'playable' : 'no-video',
     internalReviewStatusCode: shot.internalReviewStatusCode ?? null,
     internalReviewStatusName: shot.internalReviewStatusName ?? null,

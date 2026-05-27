@@ -37,6 +37,7 @@ export interface ProjectSummary {
   projectId: string;           // 项目 ID
   projectName: string;        // 项目名称
   projectRootPath: string;    // 项目根目录
+  projectDefaultFps?: number; // 项目默认帧率
   databasePath: string;       // SQLite 数据库路径
   backupDir: string;          // 备份目录
   versionTag?: string;        // 项目统一版本字段

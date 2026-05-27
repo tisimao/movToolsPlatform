@@ -41,6 +41,11 @@ public sealed class ReviewComment : EntityBase
     public string? AnnotationDataJson { get; set; }
 
     /// <summary>
+    /// 反馈轮次ID
+    /// </summary>
+    public Guid? FeedbackRoundId { get; set; }
+
+    /// <summary>
     /// 时间码
     /// </summary>
     public string? Timecode { get; set; }

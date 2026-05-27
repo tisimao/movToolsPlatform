@@ -24,6 +24,7 @@ class LocalProjectRepository implements IProjectRepository {
   async createProject(request: {
     projectName: string;
     projectRootPath: string;
+    projectDefaultFps?: number;
     initialEpisodeCode?: string;
     initialEpisodeName?: string;
     initExcelPath?: string;

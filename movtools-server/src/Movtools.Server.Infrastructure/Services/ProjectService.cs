@@ -59,6 +59,7 @@ public sealed class ProjectService : IProjectService
             MaCheckPath = NormalizeOptionalValue(request.MaCheckPath),
             MovCheckPath = NormalizeOptionalValue(request.MovCheckPath),
             LayoutCheckPath = NormalizeOptionalValue(request.LayoutCheckPath),
+            ProjectDefaultFps = NormalizeProjectDefaultFps(request.ProjectDefaultFps),
             VersionTag = request.VersionTag.Trim(),
             LayoutTag = request.LayoutTag.Trim(),
             InitExcelPath = NormalizeOptionalValue(request.InitExcelPath),
@@ -352,6 +353,7 @@ public sealed class ProjectService : IProjectService
         project.MaCheckPath,
         project.MovCheckPath,
         project.LayoutCheckPath,
+        project.ProjectDefaultFps,
         DeserializeRootSnapshots(project.LensRootsJson, "ma"),
         DeserializeRootSnapshots(project.LayoutRootsJson, "layout"));
 
@@ -390,6 +392,8 @@ public sealed class ProjectService : IProjectService
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static int NormalizeProjectDefaultFps(int value) => value > 0 ? value : 30;
 
     private static string? SerializeRootSnapshots(IReadOnlyList<ProjectScanRootRequest>? roots, string? fallbackInitExcelPath, string defaultFileKind)
     {

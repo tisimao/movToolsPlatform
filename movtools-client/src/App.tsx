@@ -25,6 +25,7 @@ import { useProjectStore } from './stores/projectStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTaskStore } from './stores/taskStore';
 import { useDirectorNavigationStore } from './stores/directorNavigationStore';
+import { getPrimaryRole } from './auth/permissions';
 import { initializeSyncManager, getSyncManagerState, onSignalRStatusChange } from './sync';
 import { connectSignalR, disconnectSignalR } from './sync/signalrService';
 import type { AppInfo, EnvironmentStatus } from './types/ipc';
@@ -97,7 +98,7 @@ export default function App() {
   const { setTasks, upsertTask } = useTaskStore();
   const visibleNavigationItems = useMemo(() => getVisibleNavigationItems(user), [user]);
   const roleLabel = getRoleLabel(user?.roles?.[0]);
-  const primaryRole = user?.roles?.[0]?.toLowerCase() ?? 'viewer';
+  const primaryRole = getPrimaryRole(user);
   const defaultPage = useMemo<AppPage>(() => {
     if (primaryRole === 'director') {
       return 'dashboard';
@@ -337,7 +338,7 @@ export default function App() {
             onOpenReviewTask={(taskId) => {
               clearPendingReviewTaskId();
               setPendingReviewTaskId(taskId);
-              setPage('review');
+              setPage(primaryRole === 'director' ? 'review' : 'producer-review');
             }}
           />
         );
@@ -388,7 +389,7 @@ export default function App() {
     }
 
     if (page === 'producer-review') {
-      return <ProducerTaskPage initialTaskId={pendingReviewTaskId} onOpenReviewTask={(taskId) => { setPendingReviewTaskId(taskId); setPage('review' as AppPage); }} />;
+      return <ProducerTaskPage initialTaskId={pendingReviewTaskId} onOpenReviewTask={(taskId) => { setPendingReviewTaskId(taskId); setPage('producer-review' as AppPage); }} />;
     }
 
     if (page === 'review') {

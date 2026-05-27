@@ -240,11 +240,11 @@ public static class LensInternalReviewStatuses
             return normalizedFrom switch
             {
                 NotInReview => normalizedTo is ReadyForReview,
-                ReadyForReview => normalizedTo is InDirectorReview,
+                ReadyForReview => normalizedTo is InDirectorReview or PendingFeedbackFix or DirectorApproved,
                 InDirectorReview => normalizedTo is PendingFeedbackFix or DirectorApproved,
                 PendingFeedbackFix => normalizedTo is FixUpdated,
-                FixUpdated => normalizedTo is ReadyForReview,
-                DirectorApproved => false,
+                FixUpdated => normalizedTo is ReadyForReview or PendingFeedbackFix or DirectorApproved,
+                DirectorApproved => normalizedTo is InDirectorReview or PendingFeedbackFix,
                 _ => false
             };
         }

@@ -20,6 +20,7 @@ public sealed class ProjectConfiguration : IEntityTypeConfiguration<Project>
         builder.Property(x => x.MaCheckPath).HasMaxLength(500);
         builder.Property(x => x.MovCheckPath).HasMaxLength(500);
         builder.Property(x => x.LayoutCheckPath).HasMaxLength(500);
+        builder.Property(x => x.ProjectDefaultFps).HasDefaultValue(30);
         builder.Property(x => x.VersionTag).HasMaxLength(50).IsRequired();
         builder.Property(x => x.LayoutTag).HasMaxLength(50).IsRequired();
         builder.Property(x => x.InitExcelPath).HasMaxLength(500);

@@ -150,6 +150,7 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
    * 存储用户选择的项目根目录路径
    */
   const [projectRootPath, setProjectRootPath] = useState('');
+  const [projectDefaultFps, setProjectDefaultFps] = useState('30');
   /**
    * 首集编号状态和设置器
    * 存储用户输入的首集编号，默认为EP01
@@ -692,6 +693,7 @@ setIsSubmitting(true);
         const response = await projectService.createProject({
           projectName: projectName.trim(),
           projectRootPath: projectRootPath.trim(),
+          projectDefaultFps: Number(projectDefaultFps) > 0 ? Number(projectDefaultFps) : 30,
           initialEpisodeCode: initialEpisodeCode.trim(),
           initialEpisodeName: initialEpisodeName.trim() || undefined,
           initExcelPath: initExcelPath.trim() || undefined,
@@ -707,6 +709,7 @@ setIsSubmitting(true);
         if (response.success) {
           setProjectName('');
           setProjectRootPath('');
+          setProjectDefaultFps('30');
           setInitialEpisodeCode('EP01');
           setInitialEpisodeName('');
           setInitExcelPath('');
@@ -993,6 +996,18 @@ setIsSubmitting(true);
                 浏览
               </button>
             </div>
+          </label>
+
+          <label className="field">
+            <span>项目默认 fps</span>
+            <input
+              inputMode="numeric"
+              min={1}
+              onChange={(event) => setProjectDefaultFps(event.target.value)}
+              placeholder="默认 30"
+              type="number"
+              value={projectDefaultFps}
+            />
           </label>
 
           <div className="form-grid compact-grid">

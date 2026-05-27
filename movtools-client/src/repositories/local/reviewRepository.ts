@@ -134,6 +134,10 @@ export const localReviewRepository: IReviewRepository = {
     return { success: false, error: '本地模式下不支持审片任务管理。' };
   },
 
+  async completeTask(_taskId: string): Promise<ReviewTaskActionResponse> {
+    return { success: false, error: '本地模式下不支持审片任务管理。' };
+  },
+
   async closeTask(_taskId: string): Promise<ReviewTaskActionResponse> {
     return { success: false, error: '本地模式下不支持审片任务管理。' };
   },

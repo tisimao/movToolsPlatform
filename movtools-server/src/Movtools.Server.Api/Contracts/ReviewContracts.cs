@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Movtools.Server.Domain.Entities;
 
 namespace Movtools.Server.Api.Contracts;
@@ -63,13 +64,13 @@ public partial record ReviewCommentResponse
     public string CommentText => Content;
 }
 
-public record ReviewTaskShotResponse(
+public partial record ReviewTaskShotResponse(
     Guid Id,
     Guid ReviewTaskId,
     Guid LensId,
     string LensCode,
     int Sequence,
-    string ParticipationMode,
+    string ReviewParticipationMode,
     string? SubmitVersionNum,
     string? PlayVersionNum,
     string Status,
@@ -78,6 +79,12 @@ public record ReviewTaskShotResponse(
     string? LensInternalReviewStatusCode,
     DateTimeOffset? LensInternalReviewUpdatedAtUtc,
     Guid? LatestFeedbackId = null);
+
+public partial record ReviewTaskShotResponse
+{
+    [JsonPropertyName("participationMode")]
+    public string ParticipationMode => ReviewParticipationMode;
+}
 
 public record ReviewTaskSummaryResponse(
     int ShotCount,
@@ -103,7 +110,8 @@ public record ReviewTaskUpdateRequest(
     string Name,
     string? Description,
     Guid? DirectorUserId,
-    DateTimeOffset? DueAtUtc);
+    DateTimeOffset? DueAtUtc,
+    IReadOnlyList<ReviewTaskShotCreateRequest>? Shots);
 
 public record ProducerReviewTaskCreateRequest(
     string ProjectId,
@@ -112,13 +120,15 @@ public record ProducerReviewTaskCreateRequest(
     Guid? DirectorId,
     string? Description,
     DateTimeOffset? DeadlineUtc,
-    IReadOnlyList<Guid>? ShotIds);
+    IReadOnlyList<Guid>? ShotIds,
+    IReadOnlyList<ReviewTaskShotCreateRequest>? Shots = null);
 
 public record ProducerReviewTaskUpdateRequest(
     string? TaskName,
     Guid? DirectorId,
     string? Description,
-    DateTimeOffset? DeadlineUtc);
+    DateTimeOffset? DeadlineUtc,
+    IReadOnlyList<ReviewTaskShotCreateRequest>? Shots = null);
 
 public record ProducerReviewTaskShotIdsRequest(
     IReadOnlyList<Guid> ShotIds);
@@ -130,7 +140,7 @@ public record ReviewTaskShotCreateRequest(
     Guid LensId,
     int Sequence,
     string? SubmitVersionNum,
-    string ParticipationMode = "review");
+    string ParticipationMode);
 
 public record ReviewFeedbackCreateRequest(
     Guid ReviewTaskId,
@@ -191,7 +201,10 @@ public record ReviewFeedbackRoundResponse(
     Guid FeedbackRoundId,
     DateTimeOffset CreatedAtUtc,
     int FeedbackCount,
-    IReadOnlyList<ReviewDrawingFrameResponse> DrawingFrames);
+    IReadOnlyList<ReviewDrawingFrameResponse> DrawingTimeline)
+{
+    public IReadOnlyList<ReviewDrawingFrameResponse> DrawingFrames => DrawingTimeline;
+}
 
 public record ReviewFeedbackLensResponse(
     Guid LensId,

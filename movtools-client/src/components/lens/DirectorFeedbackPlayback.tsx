@@ -1,15 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReviewFeedback } from '../../types/review';
+import type { SyntheticEvent } from 'react';
+import type { ReviewFeedback, ReviewDrawingFrame } from '../../types/review';
 import { pathsToDataUrl } from '../AnnotationCanvas';
-import { collectDirectorFeedbackMaskPaths, selectCurrentDirectorFeedbacks } from '../../lib/directorFeedback';
+import { selectCurrentDirectorFeedbacks } from '../../lib/directorFeedback';
+import { resolveReviewVisibleAnnotationPaths } from '../../lib/reviewDrawingResolver';
+import { DEFAULT_REVIEW_PLAYBACK_FPS } from '../../lib/reviewPlaybackFps';
+
+const DEFAULT_OVERLAY_WIDTH = 640;
+const DEFAULT_OVERLAY_HEIGHT = 360;
+const PLAYBACK_FPS = DEFAULT_REVIEW_PLAYBACK_FPS;
 
 interface DirectorFeedbackPlaybackProps {
   feedbacks: ReviewFeedback[];
+  drawingTimeline: ReviewDrawingFrame[];
   currentVersionNum?: string | null;
   videoSrc: string | null;
   sourceLabel: string;
-  maskEnabled: boolean;
-  onMaskEnabledChange: (nextValue: boolean) => void;
+  sourceDescription?: string | null;
+  seekTarget: { frameNumber: number; requestId: number } | null;
+  fps?: number;
 }
 
 function formatTime(isoString: string): string {
@@ -23,17 +32,26 @@ function formatTime(isoString: string): string {
 
 export function DirectorFeedbackPlayback({
   feedbacks,
+  drawingTimeline,
   currentVersionNum,
   videoSrc,
   sourceLabel,
-  maskEnabled,
-  onMaskEnabledChange,
+  sourceDescription,
+  seekTarget,
+  fps = PLAYBACK_FPS,
 }: DirectorFeedbackPlaybackProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  const [mediaSize, setMediaSize] = useState({ width: DEFAULT_OVERLAY_WIDTH, height: DEFAULT_OVERLAY_HEIGHT });
+  const [currentTime, setCurrentTime] = useState(0);
 
   const currentRoundFeedbacks = useMemo(() => selectCurrentDirectorFeedbacks(feedbacks, currentVersionNum), [currentVersionNum, feedbacks]);
-  const maskPaths = useMemo(() => collectDirectorFeedbackMaskPaths(currentRoundFeedbacks), [currentRoundFeedbacks]);
+  const currentFrameNumber = useMemo(() => Math.max(1, Math.floor(currentTime * fps) + 1), [currentTime, fps]);
+  const visiblePaths = useMemo(
+    () => resolveReviewVisibleAnnotationPaths({ drawingTimeline }, currentFrameNumber, fps),
+    [currentFrameNumber, drawingTimeline, fps],
+  );
 
   useEffect(() => {
     const element = stageRef.current;
@@ -47,49 +65,105 @@ export function DirectorFeedbackPlayback({
 
     updateSize();
 
-    const ObserverCtor = window.ResizeObserver;
-    if (!ObserverCtor) {
+    if (!window.ResizeObserver) {
       return;
     }
 
-    const observer = new ObserverCtor(updateSize);
+    const observer = new window.ResizeObserver(updateSize);
     observer.observe(element);
     return () => observer.disconnect();
   }, [videoSrc]);
 
+  const frameSize = useMemo(() => {
+    const mediaWidth = mediaSize.width > 0 ? mediaSize.width : DEFAULT_OVERLAY_WIDTH;
+    const mediaHeight = mediaSize.height > 0 ? mediaSize.height : DEFAULT_OVERLAY_HEIGHT;
+    const aspect = mediaWidth / mediaHeight;
+
+    const availableWidth = stageSize.width > 0 ? stageSize.width : mediaWidth;
+    const availableHeight = stageSize.height > 0 ? stageSize.height : mediaHeight;
+
+    let width = availableWidth;
+    let height = width / aspect;
+    if (height > availableHeight) {
+      height = availableHeight;
+      width = height * aspect;
+    }
+
+    return { width: Math.max(1, Math.floor(width)), height: Math.max(1, Math.floor(height)) };
+  }, [mediaSize.height, mediaSize.width, stageSize.height, stageSize.width]);
+
   const maskSrc = useMemo(() => {
-    if (!maskEnabled || stageSize.width <= 0 || stageSize.height <= 0 || maskPaths.length === 0) {
+    if (visiblePaths.length === 0) {
       return '';
     }
 
-    return pathsToDataUrl(maskPaths, stageSize.width, stageSize.height);
-  }, [maskEnabled, maskPaths, stageSize.height, stageSize.width]);
+    return pathsToDataUrl(visiblePaths, DEFAULT_OVERLAY_WIDTH, DEFAULT_OVERLAY_HEIGHT);
+  }, [visiblePaths]);
+
+  function applySeekTarget(): void {
+    if (!seekTarget || !videoRef.current) {
+      return;
+    }
+
+    const nextTime = Math.max(0, (seekTarget.frameNumber - 1) / fps);
+    try {
+      videoRef.current.currentTime = nextTime;
+      setCurrentTime(nextTime);
+    } catch {
+      // ignore seek failures until metadata is ready
+    }
+  }
+
+  function handleLoadedMetadata(event: SyntheticEvent<HTMLVideoElement>): void {
+    const video = event.currentTarget;
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      setMediaSize({ width: video.videoWidth, height: video.videoHeight });
+    }
+    setCurrentTime(video.currentTime || 0);
+    applySeekTarget();
+  }
+
+  function handleTimeUpdate(event: SyntheticEvent<HTMLVideoElement>): void {
+    setCurrentTime(event.currentTarget.currentTime || 0);
+  }
+
+  useEffect(() => {
+    applySeekTarget();
+  }, [seekTarget?.requestId]);
 
   return (
     <section className="panel stack-gap lens-director-feedback-playback-card">
       <div className="section-heading lens-version-header">
         <div>
           <h4>反馈回放预览</h4>
-          <p className="muted">关闭时播放原视频，开启时仅叠加当前轮正式已提交绘制内容。</p>
+          <p className="muted">按当前视频时间逐帧叠加当前轮可见绘制路径。</p>
         </div>
-        <label className="director-feedback-mask-toggle">
-          <input checked={maskEnabled} onChange={(event) => onMaskEnabledChange(event.target.checked)} type="checkbox" />
-          <span>显示导演反馈遮罩</span>
-        </label>
       </div>
 
       <div className="director-feedback-playback-meta muted">
+        <span>当前时间 {currentTime.toFixed(2)}s</span>
+        <span>当前帧 {currentFrameNumber}</span>
         <span>当前轮反馈 {currentRoundFeedbacks.length} 条</span>
-        <span>遮罩绘制 {maskPaths.length} 段</span>
-        <span>{maskEnabled ? '已开启遮罩回放' : '原视频回放中'}</span>
+        <span>可见路径 {visiblePaths.length} 段</span>
         {sourceLabel ? <span>{sourceLabel}</span> : null}
+        {sourceDescription ? <span>{sourceDescription}</span> : null}
       </div>
 
       {videoSrc ? (
         <div className="director-feedback-playback-stage" ref={stageRef}>
-          <video className="director-feedback-playback-video" controls preload="metadata" src={videoSrc} />
-          {maskEnabled && maskSrc ? <img alt="导演反馈遮罩" className="director-feedback-playback-mask" src={maskSrc} /> : null}
-          {maskEnabled && !maskSrc ? <div className="director-feedback-playback-empty muted">当前轮没有可叠加的正式绘制内容。</div> : null}
+          <div className="director-feedback-playback-frame" style={{ width: frameSize.width, height: frameSize.height }}>
+            <video
+              ref={videoRef}
+              className="director-feedback-playback-video"
+              controls
+              onLoadedMetadata={handleLoadedMetadata}
+              onTimeUpdate={handleTimeUpdate}
+              preload="metadata"
+              src={videoSrc}
+            />
+            {maskSrc ? <img alt="导演反馈遮罩" className="director-feedback-playback-mask" src={maskSrc} /> : null}
+            {!maskSrc ? <div className="director-feedback-playback-empty muted">当前帧没有可见绘制内容。</div> : null}
+          </div>
         </div>
       ) : (
         <div className="director-feedback-playback-empty muted">当前版本没有可回放的视频。</div>

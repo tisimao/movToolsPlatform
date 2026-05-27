@@ -20,6 +20,7 @@ import type { AppRole } from '../auth/permissions';
  * 2. 草稿任务不改变状态：镜头加入草稿任务时保持原状态。
  * 3. DIRECTOR_APPROVED 保持通过态：
  *    - 不会被草稿任务装配、普通任务刷新、正式提交误推进为 IN_DIRECTOR_REVIEW
+ *    - 导演可手动撤销通过，将其回退到 IN_DIRECTOR_REVIEW 重新评审
  *    - 只有导演新的反馈动作才使其回到 PENDING_FEEDBACK_FIX
  * 4. 正式提交任务时，只推动 READY_FOR_REVIEW / FIX_UPDATED 的镜头进入 IN_DIRECTOR_REVIEW
  */
@@ -131,4 +132,8 @@ export function getInternalReviewActionsForRole(role: string): InternalReviewSta
     default:
       return [];
   }
+}
+
+export function canDirectorApproveShot(status?: InternalReviewStatusCode | null): boolean {
+  return status === 'IN_DIRECTOR_REVIEW';
 }

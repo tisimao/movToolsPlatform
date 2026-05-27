@@ -31,6 +31,11 @@ public sealed class Project : EntityBase
     public string? LayoutCheckPath { get; set; }
 
     /// <summary>
+    /// 项目默认帧率
+    /// </summary>
+    public int ProjectDefaultFps { get; set; } = 30;
+
+    /// <summary>
     /// 版本标签
     /// </summary>
     public string VersionTag { get; set; } = string.Empty;

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Movtools.Server.Api.Contracts;
+using Movtools.Server.Domain.Entities;
 using Movtools.Server.Infrastructure.Persistence;
 using Movtools.Server.Infrastructure.Services;
 
@@ -98,7 +99,7 @@ public sealed class Batch18InternalReviewStatusTests
     }
 
     [Fact]
-    public async Task Formal_submit_only_promotes_READY_FOR_REVIEW_and_FIX_UPDATED()
+    public async Task Formal_submit_keeps_READY_FOR_REVIEW_until_director_action()
     {
         using var factory = CreateFactory();
         await ResetDatabaseAsync(factory);
@@ -128,7 +129,8 @@ public sealed class Batch18InternalReviewStatusTests
         var lensAfterSubmit = await adminClient.GetFromJsonAsync<LensResponse>(
             $"/api/lenses/{lens.Id}", JsonOptions);
         Assert.NotNull(lensAfterSubmit);
-        Assert.Equal("IN_DIRECTOR_REVIEW", lensAfterSubmit!.InternalReviewStatusCode);
+        Assert.Equal("READY_FOR_REVIEW", lensAfterSubmit!.InternalReviewStatusCode);
+
     }
 
     [Fact]
@@ -270,6 +272,298 @@ public sealed class Batch18InternalReviewStatusTests
         Assert.Equal(1, approvedCount.GetInt32());
     }
 
+    [Fact]
+    public async Task Director_can_reopen_DIRECTOR_APPROVED_shot_to_IN_DIRECTOR_REVIEW()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "REOPEN-TEST");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var approved = await AdminTransitionToDirectorApprovedAsync(adminClient, lens!);
+        Assert.Equal("DIRECTOR_APPROVED", approved.InternalReviewStatusCode);
+
+        var reopenResponse = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{approved.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("IN_DIRECTOR_REVIEW", "reopen review", null),
+            JsonOptions);
+        reopenResponse.EnsureSuccessStatusCode();
+
+        var reopened = await reopenResponse.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(reopened);
+        Assert.Equal("IN_DIRECTOR_REVIEW", reopened!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_can_mark_shot_director_approved()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "APPROVE-DIRECTOR");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var approved = await AdminTransitionToDirectorApprovedAsync(adminClient, lens!);
+        Assert.Equal("DIRECTOR_APPROVED", approved.InternalReviewStatusCode);
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{approved.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("DIRECTOR_APPROVED", "approve shot", null),
+            JsonOptions);
+
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, responseText);
+        var detail = await response.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal("DIRECTOR_APPROVED", detail!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_can_mark_ready_shot_director_approved_when_task_started()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+        using var producerClient = await CreateProducerClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "APPROVE-READY-STARTED");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+        var producerUser = await GetUserByUserNameAsync(factory, "producer");
+
+        (await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions)).EnsureSuccessStatusCode();
+        (await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project.Code, producerUser.Id, "producer"),
+            JsonOptions)).EnsureSuccessStatusCode();
+
+        var draftResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/draft",
+            new ProducerReviewTaskCreateRequest(project!.Code, null, "Started Review", directorUser.Id, null, null, [lens!.Id]),
+            JsonOptions);
+        draftResponse.EnsureSuccessStatusCode();
+        var draftBody = await draftResponse.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        var taskId = draftBody.GetProperty("taskId").GetGuid();
+
+        (await producerClient.PostAsync($"/api/review-tasks/{taskId}/submit", new StringContent(string.Empty))).EnsureSuccessStatusCode();
+        (await directorClient.PostAsync($"/api/review-tasks/tasks/{taskId}/start", new StringContent(string.Empty))).EnsureSuccessStatusCode();
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{lens.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("DIRECTOR_APPROVED", "approve started shot", null),
+            JsonOptions);
+
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, responseText);
+        var detail = await response.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal("DIRECTOR_APPROVED", detail!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_can_mark_shot_pending_feedback_fix()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "REWORK-DIRECTOR");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var approved = await AdminTransitionToDirectorApprovedAsync(adminClient, lens!);
+        Assert.Equal("DIRECTOR_APPROVED", approved.InternalReviewStatusCode);
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{approved.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("PENDING_FEEDBACK_FIX", "need rework", null),
+            JsonOptions);
+
+        response.EnsureSuccessStatusCode();
+        var detail = await response.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal("PENDING_FEEDBACK_FIX", detail!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_can_rework_fix_updated_shot_when_task_started()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+        using var producerClient = await CreateProducerClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "REWORK-FIX-STARTED");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+        var producerUser = await GetUserByUserNameAsync(factory, "producer");
+
+        (await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions)).EnsureSuccessStatusCode();
+        (await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project.Code, producerUser.Id, "producer"),
+            JsonOptions)).EnsureSuccessStatusCode();
+
+        var readyResponse = await adminClient.PutAsJsonAsync(
+            $"/api/lenses/{lens!.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("READY_FOR_REVIEW", null, null),
+            JsonOptions);
+        readyResponse.EnsureSuccessStatusCode();
+
+        var fixUpdatedResponse = await adminClient.PutAsJsonAsync(
+            $"/api/lenses/{lens.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("IN_DIRECTOR_REVIEW", null, null),
+            JsonOptions);
+        fixUpdatedResponse.EnsureSuccessStatusCode();
+
+        fixUpdatedResponse = await adminClient.PutAsJsonAsync(
+            $"/api/lenses/{lens.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("PENDING_FEEDBACK_FIX", null, null),
+            JsonOptions);
+        fixUpdatedResponse.EnsureSuccessStatusCode();
+
+        fixUpdatedResponse = await adminClient.PutAsJsonAsync(
+            $"/api/lenses/{lens.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("FIX_UPDATED", null, null),
+            JsonOptions);
+        fixUpdatedResponse.EnsureSuccessStatusCode();
+
+        var draftResponse = await adminClient.PostAsJsonAsync(
+            "/api/review-tasks/draft",
+            new ProducerReviewTaskCreateRequest(project!.Code, null, "Started Rework", directorUser.Id, null, null, [lens!.Id]),
+            JsonOptions);
+        draftResponse.EnsureSuccessStatusCode();
+        var draftBody = await draftResponse.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        var taskId = draftBody.GetProperty("taskId").GetGuid();
+
+        (await producerClient.PostAsync($"/api/review-tasks/{taskId}/submit", new StringContent(string.Empty))).EnsureSuccessStatusCode();
+        (await directorClient.PostAsync($"/api/review-tasks/tasks/{taskId}/start", new StringContent(string.Empty))).EnsureSuccessStatusCode();
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{lens.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("PENDING_FEEDBACK_FIX", "rework started shot", null),
+            JsonOptions);
+
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, responseText);
+        var detail = await response.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal("PENDING_FEEDBACK_FIX", detail!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_can_rework_DIRECTOR_APPROVED_shot_to_PENDING_FEEDBACK_FIX()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "REWORK-DIRECTOR-APPROVED");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var approved = await AdminTransitionToDirectorApprovedAsync(adminClient, lens!);
+        Assert.Equal("DIRECTOR_APPROVED", approved.InternalReviewStatusCode);
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{approved.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("PENDING_FEEDBACK_FIX", "need rework", null),
+            JsonOptions);
+
+        response.EnsureSuccessStatusCode();
+        var detail = await response.Content.ReadFromJsonAsync<LensResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal("PENDING_FEEDBACK_FIX", detail!.InternalReviewStatusCode);
+    }
+
+    [Fact]
+    public async Task Director_cannot_promote_shot_to_READY_FOR_REVIEW()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var directorClient = await CreateDirectorClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "READY-DIRECTOR-DENY");
+        var directorUser = await GetUserByUserNameAsync(factory, "director");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, directorUser.Id, "director"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var response = await directorClient.PutAsJsonAsync(
+            $"/api/lenses/{lens!.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("READY_FOR_REVIEW", "try promote", null),
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Producer_cannot_reopen_DIRECTOR_APPROVED_shot_to_IN_DIRECTOR_REVIEW()
+    {
+        using var factory = CreateFactory();
+        await ResetDatabaseAsync(factory);
+        using var adminClient = await CreateAdminClientAsync(factory);
+        using var producerClient = await CreateProducerClientAsync(factory);
+
+        var (lens, project) = await CreateProjectEpisodeLensAsync(adminClient, "REOPEN-DENY");
+        var producerUser = await GetUserByUserNameAsync(factory, "producer");
+
+        var memberResponse = await adminClient.PostAsJsonAsync(
+            "/api/project-members",
+            new CreateProjectMemberRequest(project!.Code, producerUser.Id, "producer"),
+            JsonOptions);
+        memberResponse.EnsureSuccessStatusCode();
+
+        var approved = await AdminTransitionToDirectorApprovedAsync(adminClient, lens!);
+        Assert.Equal("DIRECTOR_APPROVED", approved.InternalReviewStatusCode);
+
+        var reopenResponse = await producerClient.PutAsJsonAsync(
+            $"/api/lenses/{approved.Id}/internal-review-status",
+            new LensInternalReviewStatusUpdateRequest("IN_DIRECTOR_REVIEW", "reopen review", null),
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, reopenResponse.StatusCode);
+    }
+
     private ServerApiFactory CreateFactory() => new();
 
     private async Task ResetDatabaseAsync(ServerApiFactory factory)
@@ -294,12 +588,31 @@ public sealed class Batch18InternalReviewStatusTests
             END $$;
             """);
         await seeder.SeedCoreDataAsync();
+        var passwordHashService = scope.ServiceProvider.GetRequiredService<Movtools.Server.Application.Interfaces.IPasswordHashService>();
+        await EnsureCollaboratorUserAsync(dbContext, passwordHashService, "producer", "制片用户", "Producer@123456", "producer");
+        await EnsureCollaboratorUserAsync(dbContext, passwordHashService, "director", "导演用户", "Director@123456", "director");
     }
 
     private async Task<HttpClient> CreateAdminClientAsync(ServerApiFactory factory)
     {
         var client = factory.CreateClient();
         var login = await LoginAsync(client, "admin", DatabaseSeeder.AdminPassword);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        return client;
+    }
+
+    private async Task<HttpClient> CreateDirectorClientAsync(ServerApiFactory factory)
+    {
+        var client = factory.CreateClient();
+        var login = await LoginAsync(client, "director", "Director@123456");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        return client;
+    }
+
+    private async Task<HttpClient> CreateProducerClientAsync(ServerApiFactory factory)
+    {
+        var client = factory.CreateClient();
+        var login = await LoginAsync(client, "producer", "Producer@123456");
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
         return client;
     }
@@ -330,6 +643,47 @@ public sealed class Batch18InternalReviewStatusTests
             JsonOptions).ReadAsJsonAsync<LensResponse>(JsonOptions);
 
         return (lens, project);
+    }
+
+    private static async Task<User> GetUserByUserNameAsync(ServerApiFactory factory, string userName)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<MovtoolsDbContext>();
+        return await dbContext.Users.FirstAsync(u => u.UserName == userName);
+    }
+
+    private static async Task EnsureCollaboratorUserAsync(
+        MovtoolsDbContext dbContext,
+        Movtools.Server.Application.Interfaces.IPasswordHashService passwordHashService,
+        string userName,
+        string displayName,
+        string password,
+        string roleCode)
+    {
+        var normalizedUserName = userName.ToUpperInvariant();
+        var user = await dbContext.Users.FirstOrDefaultAsync(x => x.NormalizedUserName == normalizedUserName);
+        if (user is null)
+        {
+            user = new User
+            {
+                UserName = userName,
+                NormalizedUserName = normalizedUserName,
+                DisplayName = displayName,
+                PasswordHash = passwordHashService.Hash(password),
+                IsActive = true
+            };
+
+            dbContext.Users.Add(user);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var role = await dbContext.Roles.FirstAsync(x => x.Code == roleCode);
+        var hasRole = await dbContext.UserRoles.AnyAsync(x => x.UserId == user.Id && x.RoleId == role.Id);
+        if (!hasRole)
+        {
+            dbContext.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id });
+            await dbContext.SaveChangesAsync();
+        }
     }
 
     private static async Task<LensResponse> AdminTransitionToDirectorApprovedAsync(HttpClient client, LensResponse lens)

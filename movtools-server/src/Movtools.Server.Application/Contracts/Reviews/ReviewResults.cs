@@ -82,7 +82,20 @@ public sealed record ReviewFeedbackRoundResult(
     Guid FeedbackRoundId,
     DateTimeOffset CreatedAtUtc,
     int FeedbackCount,
-    IReadOnlyList<ReviewDrawingFrameResult> DrawingFrames);
+    DateTimeOffset? LatestFeedbackAtUtc,
+    IReadOnlyList<ReviewDrawingFrameResult> DrawingTimeline)
+{
+    public IReadOnlyList<ReviewDrawingFrameResult> DrawingFrames => DrawingTimeline;
+}
+
+public sealed record ReviewFeedbackLensResult(
+    Guid LensId,
+    Guid? LatestFeedbackRoundId,
+    DateTimeOffset? LatestFeedbackAtUtc,
+    IReadOnlyList<ReviewCommentResult> Feedbacks,
+    IReadOnlyList<ReviewDrawingFrameResult> DrawingFrames,
+    ReviewFeedbackRoundResult? LatestRound,
+    bool IncludeAllRounds);
 
 public sealed record ReviewTaskShotResult(
     Guid Id,
@@ -98,7 +111,10 @@ public sealed record ReviewTaskShotResult(
     DateTimeOffset? LastFeedbackAtUtc,
     string? LensInternalReviewStatusCode,
     DateTimeOffset? LensInternalReviewUpdatedAtUtc,
-    Guid? LatestFeedbackId = null);
+    Guid? LatestFeedbackId = null)
+{
+    public string ReviewParticipationMode => ParticipationMode;
+}
 
 public sealed record ReviewTaskSummaryResult(
     int ShotCount,

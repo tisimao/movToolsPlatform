@@ -150,6 +150,7 @@ export const projectService = {
   async createProject(request: {
     projectName: string;
     projectRootPath: string;
+    projectDefaultFps?: number;
     initialEpisodeCode?: string;
     initialEpisodeName?: string;
     initExcelPath?: string;
@@ -412,6 +413,10 @@ export const reviewService = {
 
   async startTask(taskId: string): Promise<ReviewTaskActionResponse> {
     return getReviewRepository().startTask(taskId);
+  },
+
+  async completeTask(taskId: string): Promise<ReviewTaskActionResponse> {
+    return getReviewRepository().completeTask(taskId);
   },
 
   async closeTask(taskId: string): Promise<ReviewTaskActionResponse> {

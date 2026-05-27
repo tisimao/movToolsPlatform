@@ -21,7 +21,8 @@ public record ProjectCreateRequest(
     string? LensFolderRootPath = null,
     string? MaCheckPath = null,
     string? MovCheckPath = null,
-    string? LayoutCheckPath = null);
+    string? LayoutCheckPath = null,
+    int ProjectDefaultFps = 30);
 
 /// <summary>
 /// 项目初始化根目录请求
@@ -65,6 +66,7 @@ public record ProjectResponse(
     string? LayoutCheckPath,
     IReadOnlyList<ProjectScanRootResponse> LensRoots,
     IReadOnlyList<ProjectScanRootResponse> LayoutRoots,
+    int ProjectDefaultFps,
     bool IsArchived,
     long RowVersion,
     DateTimeOffset CreatedAtUtc,
@@ -88,6 +90,7 @@ public record ProjectCreateResponse(
     public string? LayoutCheckPath => Project.LayoutCheckPath;
     public IReadOnlyList<ProjectScanRootResponse> LensRoots => Project.LensRoots;
     public IReadOnlyList<ProjectScanRootResponse> LayoutRoots => Project.LayoutRoots;
+    public int ProjectDefaultFps => Project.ProjectDefaultFps;
 }
 
 

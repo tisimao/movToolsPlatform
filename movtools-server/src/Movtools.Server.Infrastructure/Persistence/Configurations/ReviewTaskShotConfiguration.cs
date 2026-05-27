@@ -14,7 +14,7 @@ public sealed class ReviewTaskShotConfiguration : IEntityTypeConfiguration<Revie
 
         builder.Property(x => x.SubmitVersionNum).HasMaxLength(50);
         builder.Property(x => x.PlayVersionNum).HasMaxLength(50);
-        builder.Property(x => x.ParticipationMode).HasMaxLength(20).IsRequired().HasDefaultValue(ReviewTaskShotParticipationModes.Review);
+        builder.Property(x => x.ParticipationMode).HasMaxLength(20).IsRequired();
         builder.Property(x => x.Status).HasMaxLength(50).IsRequired();
 
         builder.HasOne(x => x.ReviewTask)

@@ -8,7 +8,9 @@ import type { ReviewDetailPayload, ReviewListResponse, ReviewTask, ReviewAction,
 import type { ReviewTaskStatus } from '../../types/review';
 import { apiClient } from '../../api/client';
 import { resolveImageUrl } from '../../lib/imageUrl';
+import { resolveReviewParticipationMode } from '../../lib/reviewParticipationMode';
 
+/** 映射绘制帧响应 */
 function mapDrawingFrameResponse(frame: any) {
   return {
     frameNumber: frame.frameNumber ?? null,
@@ -19,6 +21,7 @@ function mapDrawingFrameResponse(frame: any) {
   };
 }
 
+/** 将标注数据 JSON 转换为绘制帧请求列表 */
 function toDrawingFrameRequests(annotationDataJson?: string | null): CreateReviewDrawingFrameRequest[] {
   if (!annotationDataJson) return [];
 
@@ -57,10 +60,12 @@ function toDrawingFrameRequests(annotationDataJson?: string | null): CreateRevie
   }
 }
 
+/** 判断是否为本地文件路径 */
 function isLocalFilePath(filePath: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('\\\\');
 }
 
+/** 从 Base64 创建 Blob 对象 */
 function blobFromBase64(base64: string, mimeType: string): Blob {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -70,6 +75,7 @@ function blobFromBase64(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+/** 上传反馈图片到服务端，返回预览 URL */
 async function uploadFeedbackImage(lensId: string, filePath: string, sortOrder: number): Promise<string> {
   const fileResponse = await window.movtools.file.readBase64({ path: filePath });
   if (!fileResponse.success || !fileResponse.base64 || !fileResponse.fileName) {
@@ -88,6 +94,7 @@ async function uploadFeedbackImage(lensId: string, filePath: string, sortOrder: 
   return response?.previewUrl || response?.PreviewUrl || response?.preview_url || '';
 }
 
+/** 将请求中的本地图片路径上传并替换为远程 URL */
 async function normalizeImagePaths(lensId: string, request: {
   frameImagePath?: string | null;
   annotatedImagePath?: string | null;
@@ -109,18 +116,21 @@ async function normalizeImagePaths(lensId: string, request: {
   return next;
 }
 
+/** 将服务端审片状态映射为客户端状态 */
 function mapServerReviewStatus(status: string): ReviewTaskStatus {
   if (status === 'completed') return 'approved';
   if (status === 'closed') return 'rejected';
   return status as ReviewTaskStatus;
 }
 
+/** 将客户端审片状态过滤条件映射为服务端参数 */
 function mapReviewListFilter(status?: ReviewTaskStatus): string | undefined {
   if (status === 'approved') return 'completed';
   if (status === 'rejected') return 'closed';
   return status;
 }
 
+/** 映射服务端任务响应为客户端 ReviewTask */
 function mapTaskResponseToReviewTask(t: ReviewTaskResponse): ReviewTask {
   const primaryShot = t.shots?.[0];
   return {
@@ -133,6 +143,7 @@ function mapTaskResponseToReviewTask(t: ReviewTaskResponse): ReviewTask {
     projectName: t.projectName || t.projectCode || '',
     versionNum: t.versionNum || primaryShot?.submitVersionNum || primaryShot?.playVersionNum || '',
     status: mapServerReviewStatus(t.status),
+    producerStatus: t.producerStatus ?? undefined,
     submitterId: t.createdByUserId,
     submitterName: t.createdByUserName,
     submitTime: t.submittedAtUtc || t.createdAtUtc?.toString() || '',
@@ -150,18 +161,17 @@ function mapTaskResponseToReviewTask(t: ReviewTaskResponse): ReviewTask {
   };
 }
 
-function normalizeParticipationMode(value?: string | null): ReviewParticipationMode {
-  return value === 'context' ? 'context' : 'review';
-}
-
+/** 映射服务端镜头响应为客户端 ReviewTaskShot */
 function mapTaskShotResponse(shot: any): ReviewTaskShot {
+  const participationMode = resolveReviewParticipationMode(shot);
   return {
     taskShotId: shot.taskShotId,
     taskId: shot.taskId,
     shotId: shot.shotId,
     lensCode: shot.lensCode,
     sortOrder: shot.sortOrder ?? 0,
-    reviewParticipationMode: normalizeParticipationMode(shot.reviewParticipationMode),
+    participationMode: participationMode ?? undefined,
+    reviewParticipationMode: participationMode ?? undefined,
     submitVersionNum: shot.submitVersionNum ?? null,
     actualVersionNum: shot.actualVersionNum ?? null,
     feedbackCount: shot.feedbackCount ?? 0,
@@ -173,6 +183,7 @@ function mapTaskShotResponse(shot: any): ReviewTaskShot {
   };
 }
 
+/** 映射服务端任务详情响应为客户端 ReviewTaskDetail */
 function mapTaskDetailResponse(response: any): ReviewTaskDetail {
   return {
     taskId: response.taskId,
@@ -202,6 +213,7 @@ function mapTaskDetailResponse(response: any): ReviewTaskDetail {
   };
 }
 
+/** 映射服务端反馈响应为客户端 ReviewFeedback */
 function mapFeedbackResponse(feedback: any): ReviewFeedback {
   return {
     feedbackId: feedback.id,
@@ -226,7 +238,9 @@ function mapFeedbackResponse(feedback: any): ReviewFeedback {
   };
 }
 
+/** 远程审片仓储实现 */
 export const remoteReviewRepository: IReviewRepository = {
+  /** 获取审片任务列表 */
   async listReviewTasks(options?: {
     status?: ReviewTaskStatus;
     projectId?: string;
@@ -241,6 +255,10 @@ export const remoteReviewRepository: IReviewRepository = {
       if (options?.episodeId) params.append('episodeId', options.episodeId);
       if (options?.page) params.append('page', String(options.page));
       if (options?.pageSize) params.append('pageSize', String(options.pageSize));
+
+      if (!options?.status) {
+        params.append('excludeProducerDrafts', 'true');
+      }
       
       const queryString = params.toString();
        const path = queryString ? `/api/review-tasks?${queryString}` : '/api/review-tasks';
@@ -249,7 +267,9 @@ export const remoteReviewRepository: IReviewRepository = {
       const taskList = Array.isArray(tasks) ? tasks : [];
       
       // 映射为客户端类型
-      const mappedTasks: ReviewTask[] = taskList.map(mapTaskResponseToReviewTask);
+      const mappedTasks: ReviewTask[] = taskList
+        .map(mapTaskResponseToReviewTask)
+        .filter((task) => task.producerStatus !== 'draft' && task.producerStatus !== 'pending-submit');
 
       const pendingCount = mappedTasks.filter((t) => t.status === 'pending').length;
       const inReviewCount = mappedTasks.filter((t) => t.status === 'in-review').length;
@@ -279,6 +299,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 获取审片详情（任务 + 评论） */
   async getReviewDetail(taskId: string): Promise<{ success: boolean; detail?: ReviewDetailPayload; error?: string }> {
     try {
       // 获取审片任务详情
@@ -322,6 +343,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 创建审片评论 */
   async createReviewComment(request: {
     taskId: string;
     commentType: ReviewCommentType;
@@ -363,6 +385,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 提交审片动作（通过/退回/待定） */
   async submitReviewAction(taskId: string, action: ReviewAction): Promise<{ success: boolean; task?: ReviewTask; error?: string }> {
     try {
       const taskResponse = await apiClient.get<ReviewTaskResponse>(`/api/review-tasks/${taskId}`);
@@ -387,6 +410,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 提交镜头送审 */
   async submitLensForReview(lensId: string): Promise<{ success: boolean; task?: ReviewTask; error?: string }> {
     try {
        const response = await apiClient.post<ReviewTaskResponse>(
@@ -409,6 +433,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 获取镜头的反馈卡片列表 */
   async listReviewFeedbacks(lensId: string): Promise<ReviewFeedbackListResponse> {
     try {
       const response = await apiClient.get<any>(`/api/review-feedbacks/lens/${lensId}`);
@@ -426,6 +451,11 @@ export const remoteReviewRepository: IReviewRepository = {
               feedbackRoundId: response.latestRound.feedbackRoundId,
               createdAtUtc: response.latestRound.createdAtUtc,
               feedbackCount: response.latestRound.feedbackCount,
+              drawingTimeline: Array.isArray(response.latestRound.drawingTimeline)
+                ? response.latestRound.drawingTimeline.map(mapDrawingFrameResponse)
+                : Array.isArray(response.latestRound.drawingFrames)
+                  ? response.latestRound.drawingFrames.map(mapDrawingFrameResponse)
+                  : [],
               drawingFrames: Array.isArray(response.latestRound.drawingFrames)
                 ? response.latestRound.drawingFrames.map(mapDrawingFrameResponse)
                 : [],
@@ -437,6 +467,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 创建反馈卡片 */
   async createReviewFeedback(request: {
     feedbackRoundId?: string | null;
     reviewTaskId: string;
@@ -468,6 +499,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 更新反馈卡片 */
   async updateReviewFeedback(feedbackId: string, request: {
     commentText?: string | null;
     frameImagePath?: string | null;
@@ -491,6 +523,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 删除反馈卡片 */
   async deleteReviewFeedback(feedbackId: string): Promise<{ success: boolean; error?: string }> {
     try {
        await apiClient.request(`/api/review-feedbacks/${feedbackId}`, { method: 'DELETE' });
@@ -502,6 +535,7 @@ export const remoteReviewRepository: IReviewRepository = {
 
   // ========== 多镜头任务管理 ==========
 
+  /** 创建草稿任务 */
   async createDraftTask(request: CreateDraftTaskRequest): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.post<any>('/api/review-tasks/draft', {
@@ -515,7 +549,7 @@ export const remoteReviewRepository: IReviewRepository = {
         shots: request.shots ?? (request.shotIds ?? []).map((lensId, index) => ({
           lensId,
           sequence: index,
-          reviewParticipationMode: 'review',
+          participationMode: 'review',
         })),
       });
       return {
@@ -527,6 +561,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 更新任务信息 */
   async updateTask(taskId: string, request: UpdateTaskRequest): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.request<any>(`/api/review-tasks/${taskId}`, {
@@ -545,6 +580,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 获取任务详情 */
   async getTaskDetail(taskId: string): Promise<ReviewTaskDetailResponse> {
     try {
       const response = await apiClient.get<any>(`/api/review-tasks/${taskId}/detail`);
@@ -557,6 +593,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 获取制片方任务列表 */
   async listProducerTasks(options?: { status?: string; projectId?: string }): Promise<ReviewTaskListResponse> {
     try {
       const params = new URLSearchParams();
@@ -575,6 +612,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 向任务添加镜头 */
   async addTaskShots(request: AddTaskShotsRequest): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.post<any>(`/api/review-tasks/${request.taskId}/shots`, {
@@ -582,7 +620,7 @@ export const remoteReviewRepository: IReviewRepository = {
         shots: request.shots ?? request.shotIds.map((lensId, index) => ({
           lensId,
           sequence: index,
-          reviewParticipationMode: 'review',
+          participationMode: 'review',
         })),
       });
       return { success: true, task: response as ReviewTaskSummary };
@@ -591,6 +629,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 从任务移除镜头 */
   async removeTaskShot(request: RemoveTaskShotRequest): Promise<ReviewTaskActionResponse> {
     try {
       await apiClient.request(`/api/review-tasks/${request.taskId}/shots/${request.taskShotId}`, {
@@ -602,6 +641,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 重排任务中镜头的顺序 */
   async reorderTaskShots(request: ReorderTaskShotsRequest): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.request<any>(`/api/review-tasks/${request.taskId}/shots/reorder`, {
@@ -614,6 +654,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 提交任务（草稿转审核） */
   async submitTask(request: SubmitTaskRequest): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.post<any>(`/api/review-tasks/${request.taskId}/submit`, {});
@@ -623,6 +664,7 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 开始任务 */
   async startTask(taskId: string): Promise<ReviewTaskActionResponse> {
     try {
       const response = await apiClient.post<any>(`/api/review-tasks/${taskId}/start`, {});
@@ -632,11 +674,20 @@ export const remoteReviewRepository: IReviewRepository = {
     }
   },
 
+  /** 完成任务 */
+  async completeTask(taskId: string): Promise<ReviewTaskActionResponse> {
+    try {
+      const response = await apiClient.post<any>(`/api/review-tasks/${taskId}/complete`, {});
+      return { success: true, task: response as ReviewTaskSummary };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '完成任务失败' };
+    }
+  },
+
+  /** 关闭任务 */
   async closeTask(taskId: string): Promise<ReviewTaskActionResponse> {
     try {
-      const response = await apiClient.request<any>(`/api/review-tasks/${taskId}/close`, {
-        method: 'POST',
-      });
+      const response = await apiClient.request<any>(`/api/review-tasks/tasks/${taskId}/close`, {method: 'POST',});
       return { success: true, task: response as ReviewTaskSummary };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : '关闭任务失败' };

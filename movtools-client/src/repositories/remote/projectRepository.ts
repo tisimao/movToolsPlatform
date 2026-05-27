@@ -97,6 +97,7 @@ function mapRemoteProjectToLocal(raw: RemoteProjectResponse): ProjectSummary {
     projectId: raw.code,
     projectName: raw.name,
     projectRootPath: fallbackLegacyProjectRootPath(raw),
+    projectDefaultFps: normalizeProjectDefaultFps(raw.projectDefaultFps),
     databasePath: '',
     backupDir: '',
     versionTag: raw.versionTag,
@@ -154,6 +155,10 @@ function mapRemoteEpisodeToLocal(raw: RemoteEpisodeResponse): EpisodeSummary {
     createdAt: raw.createdAtUtc,
     updatedAt: raw.updatedAtUtc,
   };
+}
+
+function normalizeProjectDefaultFps(value?: number | null): number {
+  return Number.isFinite(value ?? NaN) && (value ?? 0) > 0 ? Math.trunc(value as number) : 30;
 }
 
 function mapRemoteStatusToLocal(status: string): LensStatus {
@@ -707,6 +712,7 @@ class RemoteProjectRepository implements IProjectRepository {
   async createProject(request: {
     projectName: string;
     projectRootPath: string;
+    projectDefaultFps?: number;
     initialEpisodeCode?: string;
     initialEpisodeName?: string;
     initExcelPath?: string;
@@ -727,6 +733,7 @@ class RemoteProjectRepository implements IProjectRepository {
         code: string;
         name: string;
         projectRootPath: string;
+        projectDefaultFps?: number;
         versionTag: string;
         layoutTag: string;
         initialEpisodeCode?: string;
@@ -741,6 +748,7 @@ class RemoteProjectRepository implements IProjectRepository {
         code,
         name,
         projectRootPath: request.projectRootPath.trim(),
+        projectDefaultFps: normalizeProjectDefaultFps(request.projectDefaultFps),
         versionTag: 'ANI',
         layoutTag: 'LAY',
       };
@@ -790,6 +798,7 @@ class RemoteProjectRepository implements IProjectRepository {
       const localCreateResult = await window.movtools.project.create({
         projectName: request.projectName,
         projectRootPath: request.projectRootPath,
+        projectDefaultFps: request.projectDefaultFps,
         initialEpisodeCode: request.initialEpisodeCode?.trim(),
         initialEpisodeName: request.initialEpisodeName?.trim() || request.initialEpisodeCode?.trim(),
         initExcelPath: request.initExcelPath?.trim() || undefined,

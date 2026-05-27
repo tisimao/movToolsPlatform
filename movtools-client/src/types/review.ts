@@ -72,6 +72,7 @@ export interface ReviewTask {
   projectName: string;
   versionNum: string;
   status: ReviewTaskStatus;
+  producerStatus?: ProducerTaskStatus;
   submitterId: string;
   submitterName: string;
   submitTime: string;
@@ -204,6 +205,7 @@ export interface ReviewFeedbackListResponse {
     feedbackRoundId: string;
     createdAtUtc: string;
     feedbackCount: number;
+    drawingTimeline?: ReviewDrawingFrame[];
     drawingFrames: ReviewDrawingFrame[];
   } | null;
   error?: string;
@@ -228,6 +230,7 @@ export interface ReviewTaskResponse {
   projectCode?: string;
   versionNum?: string;
   status: string;
+  producerStatus?: ProducerTaskStatus;
   resultComment?: string;
   reviewerId?: string;
   reviewerName?: string;
@@ -289,6 +292,7 @@ export interface ReviewTaskShot {
   shotId: string;
   lensCode: string;
   sortOrder: number;
+  participationMode?: ReviewParticipationMode | null;
   reviewParticipationMode?: ReviewParticipationMode;
   submitVersionNum?: string | null;
   actualVersionNum?: string | null;
@@ -345,7 +349,7 @@ export interface CreateReviewTaskShotRequest {
   lensId: string;
   sequence: number;
   submitVersionNum?: string | null;
-  reviewParticipationMode?: ReviewParticipationMode;
+  participationMode: ReviewParticipationMode;
 }
 
 /** 更新任务请求 */

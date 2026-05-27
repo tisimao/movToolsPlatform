@@ -65,7 +65,7 @@ public sealed class DiagnosticsApiTests
         Assert.NotNull(payload);
         Assert.Equal("validation", payload!.Category);
         Assert.Equal("validation_error", payload.Code);
-        Assert.NotEmpty(payload.TraceId);
+        Assert.False(string.IsNullOrWhiteSpace(payload.TraceId));
         Assert.Contains("name", payload.Errors!.Keys, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -84,7 +84,7 @@ public sealed class DiagnosticsApiTests
         Assert.NotNull(payload);
         Assert.Equal("system", payload!.Category);
         Assert.Equal("internal_server_error", payload.Code);
-        Assert.NotEmpty(payload.TraceId);
+        Assert.False(string.IsNullOrWhiteSpace(payload.TraceId));
     }
 
     [Fact]
