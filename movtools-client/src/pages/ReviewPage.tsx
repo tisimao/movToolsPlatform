@@ -204,6 +204,11 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
     return shotFeedbackViewByShotId[activeShotId] ?? null;
   }, [activeShotId, shotFeedbackViewByShotId]);
 
+  const currentShotFeedbackRoundId = useMemo(
+    () => currentShotFeedbackView?.latestRound?.feedbackRoundId?.trim() || null,
+    [currentShotFeedbackView],
+  );
+
   const currentShotDrawingTimeline = useMemo(
     () => currentShotFeedbackView?.latestRoundDrawingTimeline ?? currentShotFeedbackView?.latestRoundDrawingFrames ?? [],
     [currentShotFeedbackView],
@@ -787,14 +792,14 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
       return;
     }
 
-    const loaded = loadReviewLocalShotState(selectedTask.taskId, activeShotId);
+    const loaded = loadReviewLocalShotState(selectedTask.taskId, activeShotId, currentShotFeedbackRoundId);
     setLocalShotState(loaded);
     setActiveDraftId((prev) => (loaded.feedbackDrafts.some((draft) => draft.draftId === prev) ? prev : null));
     if (!editorIsDirtyRef.current) {
       applyEditorSnapshot('blank', null, '');
       setDraftImages([]);
     }
-  }, [activeShotId, selectedTask?.taskId]);
+  }, [activeShotId, currentShotFeedbackRoundId, selectedTask?.taskId]);
 
   useEffect(() => {
     if (!selectedTask || !activeShotId) return;
@@ -1933,11 +1938,6 @@ export function ReviewPage({ initialTaskId, onTaskOpened, onOpenLens }: ReviewPa
             return updated;
           });
         }
-        setAnnotationPaths(resolveReviewVisibleAnnotationPaths({
-          drawingTimeline: feedbackView.latestRoundDrawingTimeline,
-          frameDrawingRecords: clearedState?.frameDrawingRecords ?? null,
-          clearFrameRecords: clearedState?.clearFrameRecords ?? null,
-        }, submittingFrameNumber, fps));
       }
     }
   }

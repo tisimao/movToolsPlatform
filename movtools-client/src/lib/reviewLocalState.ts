@@ -15,6 +15,7 @@ export interface ReviewClearFrameRecord {
 export interface ReviewLocalShotState {
   taskId: string;
   shotId: string;
+  feedbackRoundId: string | null;
   feedbackDrafts: LocalFeedbackDraft[];
   frameDrawingRecords: ReviewFrameDrawingRecord[];
   clearFrameRecords: ReviewClearFrameRecord[];
@@ -22,6 +23,11 @@ export interface ReviewLocalShotState {
 }
 
 const STORAGE_PREFIX = 'movtools.review.local-shot-state.v1';
+
+function normalizeFeedbackRoundId(value?: string | null): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
 
 function hasWindowStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -39,14 +45,16 @@ function normalizeLoadedFeedbackDrafts(drafts: unknown[]): LocalFeedbackDraft[] 
   });
 }
 
-export function getReviewLocalShotStorageKey(taskId: string, shotId: string): string {
-  return `${STORAGE_PREFIX}:${taskId}:${shotId}`;
+export function getReviewLocalShotStorageKey(taskId: string, shotId: string, feedbackRoundId?: string | null): string {
+  const roundKey = normalizeFeedbackRoundId(feedbackRoundId);
+  return roundKey ? `${STORAGE_PREFIX}:${taskId}:${shotId}:${roundKey}` : `${STORAGE_PREFIX}:${taskId}:${shotId}`;
 }
 
-export function createEmptyReviewLocalShotState(taskId: string, shotId: string): ReviewLocalShotState {
+export function createEmptyReviewLocalShotState(taskId: string, shotId: string, feedbackRoundId: string | null = null): ReviewLocalShotState {
   return {
     taskId,
     shotId,
+    feedbackRoundId,
     feedbackDrafts: [],
     frameDrawingRecords: [],
     clearFrameRecords: [],
@@ -54,23 +62,26 @@ export function createEmptyReviewLocalShotState(taskId: string, shotId: string):
   };
 }
 
-export function loadReviewLocalShotState(taskId: string, shotId: string): ReviewLocalShotState {
+export function loadReviewLocalShotState(taskId: string, shotId: string, feedbackRoundId?: string | null): ReviewLocalShotState {
   if (!hasWindowStorage()) {
-    return createEmptyReviewLocalShotState(taskId, shotId);
+    return createEmptyReviewLocalShotState(taskId, shotId, normalizeFeedbackRoundId(feedbackRoundId));
   }
 
-  const raw = window.localStorage.getItem(getReviewLocalShotStorageKey(taskId, shotId));
+  const normalizedRoundId = normalizeFeedbackRoundId(feedbackRoundId);
+  const raw = window.localStorage.getItem(getReviewLocalShotStorageKey(taskId, shotId, normalizedRoundId));
   if (!raw) {
-    return createEmptyReviewLocalShotState(taskId, shotId);
+    return createEmptyReviewLocalShotState(taskId, shotId, normalizedRoundId);
   }
 
   try {
     const parsed = JSON.parse(raw) as Partial<ReviewLocalShotState>;
     const rawFeedbackDrafts = Array.isArray(parsed.feedbackDrafts) ? parsed.feedbackDrafts : [];
     const feedbackDrafts = normalizeLoadedFeedbackDrafts(rawFeedbackDrafts);
+    const loadedRoundId = normalizeFeedbackRoundId(parsed.feedbackRoundId);
     const state = {
       taskId,
       shotId,
+      feedbackRoundId: loadedRoundId ?? normalizedRoundId,
       feedbackDrafts,
       frameDrawingRecords: Array.isArray(parsed.frameDrawingRecords) ? parsed.frameDrawingRecords : [],
       clearFrameRecords: Array.isArray(parsed.clearFrameRecords) ? parsed.clearFrameRecords : [],
@@ -92,7 +103,7 @@ export function saveReviewLocalShotState(state: ReviewLocalShotState): void {
     return;
   }
 
-  window.localStorage.setItem(getReviewLocalShotStorageKey(state.taskId, state.shotId), JSON.stringify({
+  window.localStorage.setItem(getReviewLocalShotStorageKey(state.taskId, state.shotId, state.feedbackRoundId), JSON.stringify({
     ...state,
     updatedAt: new Date().toISOString(),
   }));
@@ -100,7 +111,20 @@ export function saveReviewLocalShotState(state: ReviewLocalShotState): void {
 
 export function clearReviewLocalShotState(taskId: string, shotId: string): ReviewLocalShotState {
   const emptyState = createEmptyReviewLocalShotState(taskId, shotId);
-  saveReviewLocalShotState(emptyState);
+  if (hasWindowStorage()) {
+    const prefix = `${STORAGE_PREFIX}:${taskId}:${shotId}`;
+    const keys: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith(prefix)) {
+        keys.push(key);
+      }
+    }
+
+    for (const key of keys) {
+      window.localStorage.removeItem(key);
+    }
+  }
   return emptyState;
 }
 

@@ -256,21 +256,6 @@ function buildRoundSnapshotFromGroup(group: FeedbackRoundGroup | null): ReviewFe
   };
 }
 
-function resolveRoundTimeline(response: ReviewFeedbackListResponse): ReviewDrawingFrame[] {
-  const latestRoundTimeline = response.latestRound?.drawingTimeline ?? response.latestRound?.drawingFrames ?? [];
-  if (latestRoundTimeline.length > 0) {
-    return latestRoundTimeline;
-  }
-
-  const latestRoundId = response.latestRound?.feedbackRoundId ?? response.latestFeedbackRoundId ?? null;
-  if (!latestRoundId) {
-    return [];
-  }
-
-  const roundFeedbacks = sortFeedbacksForFrame((response.feedbacks ?? []).filter((feedback) => (feedback.feedbackRoundId?.trim() || null) === latestRoundId));
-  return roundFeedbacks.flatMap((feedback) => feedback.drawingFrames?.length ? feedback.drawingFrames : parseAnnotationDataTimeline(feedback));
-}
-
 export function getShotTimelinePaths(view: ShotFeedbackView | null | undefined, frameNumber: number): AnnotationPath[] {
   if (!view) return [];
   return resolveVisibleAnnotationPathsFromDrawingFrames(view.latestRoundDrawingTimeline.length > 0 ? view.latestRoundDrawingTimeline : view.latestRoundDrawingFrames, frameNumber);
@@ -282,7 +267,7 @@ export function buildShotFeedbackView(
   filter?: ShotFeedbackFilter | null,
 ): ShotFeedbackView {
   const feedbacks = filterFeedbacksForShot(response.feedbacks, filter ?? { shotId });
-  const latestRoundDrawingTimeline = resolveRoundTimeline(response);
+  const latestRoundDrawingTimeline = resolveFeedbackRoundTimeline(feedbacks);
   const latestRoundDrawingFrames = latestRoundDrawingTimeline;
   const frameGroupBase = groupFeedbacksByFrame(feedbacks);
   const frameIndex: FrameFeedbackIndex = {
