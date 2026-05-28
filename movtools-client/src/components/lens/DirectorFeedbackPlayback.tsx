@@ -45,6 +45,7 @@ export function DirectorFeedbackPlayback({
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [mediaSize, setMediaSize] = useState({ width: DEFAULT_OVERLAY_WIDTH, height: DEFAULT_OVERLAY_HEIGHT });
   const [currentTime, setCurrentTime] = useState(0);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const currentRoundFeedbacks = useMemo(() => selectCurrentDirectorFeedbacks(feedbacks, currentVersionNum), [currentVersionNum, feedbacks]);
   const currentFrameNumber = useMemo(() => Math.max(1, Math.floor(currentTime * fps) + 1), [currentTime, fps]);
@@ -131,12 +132,49 @@ export function DirectorFeedbackPlayback({
     applySeekTarget();
   }, [seekTarget?.requestId]);
 
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isExpanded]);
+
+  async function handleEnterFullscreen(): Promise<void> {
+    const element = stageRef.current;
+    if (!element?.requestFullscreen) {
+      setIsExpanded(true);
+      return;
+    }
+
+    try {
+      await element.requestFullscreen();
+    } catch {
+      setIsExpanded(true);
+    }
+  }
+
   return (
-    <section className="panel stack-gap lens-director-feedback-playback-card">
+    <section className={isExpanded ? 'panel stack-gap lens-director-feedback-playback-card is-expanded' : 'panel stack-gap lens-director-feedback-playback-card'}>
       <div className="section-heading lens-version-header">
         <div>
           <h4>反馈回放预览</h4>
           <p className="muted">按当前视频时间逐帧叠加当前轮可见绘制路径。</p>
+        </div>
+        <div className="actions-row compact-actions wrap-actions director-feedback-playback-actions">
+          {isExpanded ? (
+            <button className="secondary-button" onClick={() => setIsExpanded(false)} type="button">退出大窗口</button>
+          ) : (
+            <button className="secondary-button" disabled={!videoSrc} onClick={() => setIsExpanded(true)} type="button">大窗口查看</button>
+          )}
+          <button className="secondary-button" disabled={!videoSrc} onClick={() => void handleEnterFullscreen()} type="button">全屏播放</button>
         </div>
       </div>
 

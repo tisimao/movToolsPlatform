@@ -6,7 +6,7 @@
 
 - `movtools-client`：Electron + React 桌面客户端
 - `movtools-server`：ASP.NET Core Web API + SignalR + PostgreSQL 后端
-- `Doc`：产品、协议、流程相关文档
+- `Doc`：产品、协议、架构和部署文档，入口为 `Doc/README.md`
 
 ## 快速开始
 
@@ -93,6 +93,7 @@ docker compose up -d
 ## 参考文档
 
 - `Doc/通信协议文档.md`
+- `Doc/README.md`
 - `Doc/项目固化文档.md`
 - `Doc/平台功能与UI统一命名清单.md`
 - `movtools-server/README.md`

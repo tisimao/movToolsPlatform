@@ -6,13 +6,24 @@ import { useProjectStore } from '../stores/projectStore';
 import { projectService, getDataSource } from '../services/repositoryService';
 import { useDataSourceStore } from '../stores/dataSourceStore';
 import { apiClient } from '../api/client';
-import { useAuthStore } from '../auth/store';
 
 const PROJECT_MEMBER_ROLE_OPTIONS = [
-  { code: 'maker', label: '制作人员' },
   { code: 'producer', label: '制片' },
   { code: 'director', label: '导演' },
+  { code: 'maker', label: '制作人员' },
 ] as const;
+
+type ProjectMemberRoleCode = typeof PROJECT_MEMBER_ROLE_OPTIONS[number]['code'];
+
+const PROJECT_MEMBER_ROLE_CODES = PROJECT_MEMBER_ROLE_OPTIONS.map((option) => option.code);
+
+type AvailableUserItem = {
+  userId: string;
+  userName: string;
+  displayName: string;
+  roles?: string[];
+  isActive?: boolean;
+};
 
 type ProjectMemberDraft = {
   userId: string;
@@ -23,6 +34,34 @@ type ProjectMemberItem = {
   projectMemberId: string;
   projectCode: string;
 } & ProjectMemberSummary;
+
+function normalizeRoleCode(value: string | null | undefined): string {
+  const normalized = (value ?? '').trim().toLowerCase();
+  const matchedRole = PROJECT_MEMBER_ROLE_OPTIONS.find((option) => option.label === value?.trim());
+
+  return matchedRole?.code ?? normalized;
+}
+
+function getProjectMemberRoleLabel(value: string | null | undefined): string {
+  const normalized = normalizeRoleCode(value);
+  return PROJECT_MEMBER_ROLE_OPTIONS.find((option) => option.code === normalized)?.label ?? value ?? '制作人员';
+}
+
+function getAvailableUserProjectRole(user: AvailableUserItem | undefined): ProjectMemberRoleCode {
+  const matchedRole = user?.roles
+    ?.map((role) => normalizeRoleCode(role))
+    .find((role): role is ProjectMemberRoleCode => PROJECT_MEMBER_ROLE_CODES.includes(role as ProjectMemberRoleCode));
+
+  return matchedRole ?? 'maker';
+}
+
+function getAvailableUserDisplayName(user: AvailableUserItem | undefined): string {
+  if (!user) {
+    return '未知成员';
+  }
+
+  return user.displayName?.trim() || user.userName?.trim() || '未命名成员';
+}
 
 /**
  * ProjectPage 组件的属性接口
@@ -240,7 +279,7 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
    * 可选用户列表状态（用于项目成员选择）
    * 存储可以添加为项目成员的用户列表
    */
-  const [availableUsers, setAvailableUsers] = useState<Array<{ userId: string; userName: string; displayName: string }>>([]);
+  const [availableUsers, setAvailableUsers] = useState<AvailableUserItem[]>([]);
   /**
    * 选中的项目成员用户ID列表状态
    * 存储创建项目时选中的成员用户ID
@@ -281,6 +320,20 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
    * 依赖activeProjectId和projects的变化
    */
   const activeProject = useMemo(() => projects.find((entry) => entry.projectId === activeProjectId) ?? null, [activeProjectId, projects]);
+  const selectedMemberSummaries = useMemo(() => selectedMembers.map((member) => {
+    const user = availableUsers.find((entry) => entry.userId === member.userId);
+
+    return {
+      ...member,
+      displayName: getAvailableUserDisplayName(user),
+      userName: user?.userName ?? '',
+      roleLabel: getProjectMemberRoleLabel(member.projectRoleCode),
+    };
+  }), [availableUsers, selectedMembers]);
+  const availableUsersByRole = useMemo(() => PROJECT_MEMBER_ROLE_OPTIONS.map((role) => ({
+    ...role,
+    users: availableUsers.filter((user) => getAvailableUserProjectRole(user) === role.code),
+  })).filter((group) => group.users.length > 0), [availableUsers]);
   /**
    * 当前激活的集对象（备忘录）
    * 根据activeEpisodeId从episodes列表中查找对应的集，如果没找到则返回null
@@ -343,7 +396,7 @@ async function loadEpisodes(projectId?: string): Promise<void> {
 
      setUsersLoading(true);
      try {
-    const response = await apiClient.request<Array<{ userId: string; userName: string; displayName: string }>>('/api/users', {
+    const response = await apiClient.request<AvailableUserItem[]>('/api/users', {
       method: 'GET'
     });
     setAvailableUsers(response);
@@ -733,12 +786,9 @@ setIsSubmitting(true);
           return current.filter((member) => member.userId !== userId);
         }
 
-        return [...current, { userId, projectRoleCode: 'maker' }];
+        const user = availableUsers.find((entry) => entry.userId === userId);
+        return [...current, { userId, projectRoleCode: getAvailableUserProjectRole(user) }];
       });
-    }
-
-    function updateProjectMemberRole(userId: string, projectRoleCode: string): void {
-      setSelectedMembers((current) => current.map((member) => member.userId === userId ? { ...member, projectRoleCode } : member));
     }
 
     async function handleAddProjectMember(): Promise<void> {
@@ -1050,46 +1100,65 @@ setIsSubmitting(true);
               ) : availableUsers.length === 0 ? (
                 <p className="muted">当前没有可选用户，请先到用户管理中创建用户。</p>
               ) : (
-                <div className="stack-gap">
-                  <div className="checkbox-group" style={{ maxHeight: 180, overflowY: 'auto' }}>
-                    {availableUsers.map((user) => {
-                      const selectedMember = selectedMembers.find((member) => member.userId === user.userId);
-                      return (
-                        <label key={user.userId} className="checkbox-label" style={{ alignItems: 'flex-start' }}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selectedMember)}
-                            onChange={() => toggleProjectMember(user.userId)}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <div>
-                              <span>{user.displayName || user.userName}</span>
-                              <small className="muted" style={{ marginLeft: 8 }}>({user.userName})</small>
-                            </div>
-                            {selectedMember ? (
-                              <div className="inline-field-actions" style={{ marginTop: 8 }}>
-                                <select
-                                  value={selectedMember.projectRoleCode}
-                                  onChange={(event) => updateProjectMemberRole(user.userId, event.target.value)}
-                                  style={{ maxWidth: 160 }}
-                                >
-                                  {PROJECT_MEMBER_ROLE_OPTIONS.map((option) => (
-                                    <option key={option.code} value={option.code}>{option.label}</option>
-                                  ))}
-                                </select>
-                                <button className="secondary-button" onClick={() => toggleProjectMember(user.userId)} type="button">移除</button>
-                              </div>
-                            ) : null}
+                <div className="project-member-picker">
+                  <div className="selected-member-panel">
+                    <div className="project-highlight-heading">
+                      <div>
+                        <strong>已选择 {selectedMembers.length} 位成员</strong>
+                        <p className="muted">创建项目时会把这些人员加入项目，请在提交前核对姓名和职务。</p>
+                      </div>
+                      {selectedMembers.length > 0 ? (
+                        <button className="secondary-button" onClick={() => setSelectedMembers([])} type="button">清空选择</button>
+                      ) : null}
+                    </div>
+                    {selectedMemberSummaries.length > 0 ? (
+                      <div className="selected-member-list">
+                        {selectedMemberSummaries.map((member) => (
+                          <div className="selected-member-chip" key={member.userId}>
+                            <span className="member-role-badge">{member.roleLabel}</span>
+                            <strong>{member.displayName}</strong>
+                            <button className="ghost-link-button" onClick={() => toggleProjectMember(member.userId)} type="button">移除</button>
                           </div>
-                        </label>
-                      );
-                    })}
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">还没有选择成员。请从下方按职务选择需要加入项目的人员。</p>
+                    )}
                   </div>
-                  <div className="actions-row wrap-actions">
-                    <small className="muted">已选择 {selectedMembers.length} 位成员</small>
-                    {selectedMembers.length > 0 ? (
-                      <button className="secondary-button" onClick={() => setSelectedMembers([])} type="button">清空选择</button>
-                    ) : null}
+
+                  <div className="member-role-groups">
+                    {availableUsersByRole.map((group) => (
+                      <div className="member-role-group" key={group.code}>
+                        <div className="member-role-group-heading">
+                          <strong>{group.label}</strong>
+                          <span className="muted">{group.users.length} 人</span>
+                        </div>
+                        <div className="member-card-grid">
+                          {group.users.map((user) => {
+                            const selectedMember = selectedMembers.find((member) => member.userId === user.userId);
+                            return (
+                              <article className={selectedMember ? 'member-select-card is-selected' : 'member-select-card'} key={user.userId}>
+                                <div>
+                                  <div className="member-card-title">
+                                    <strong>{getAvailableUserDisplayName(user)}</strong>
+                                    <span className="member-role-badge">{group.label}</span>
+                                  </div>
+                                  <p className="muted">账号：{user.userName}</p>
+                                </div>
+                                {selectedMember ? (
+                                  <div className="member-card-actions">
+                                    <span className="success-copy">已选择为{getProjectMemberRoleLabel(selectedMember.projectRoleCode)}</span>
+                                    <button className="secondary-button" onClick={() => toggleProjectMember(user.userId)} type="button">取消选择</button>
+                                  </div>
+                                ) : (
+                                  <button className="secondary-button" onClick={() => toggleProjectMember(user.userId)} type="button">选择此人</button>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1144,7 +1213,7 @@ setIsSubmitting(true);
                           <div key={member.projectMemberId} className="project-highlight" style={{ padding: '0.75rem 1rem' }}>
                             <div className="project-highlight-heading">
                               <strong>{member.displayName}</strong>
-                              <span className="environment-pill info">{member.projectRoleCode}</span>
+                              <span className="environment-pill info">{getProjectMemberRoleLabel(member.projectRoleCode)}</span>
                             </div>
                             <div><span className="muted">用户名：</span>{member.userName}</div>
                             <div className="actions-row compact-actions">
