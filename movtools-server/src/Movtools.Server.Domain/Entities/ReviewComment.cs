@@ -68,12 +68,12 @@ public sealed class ReviewComment : EntityBase
     /// <summary>
     /// 创建人用户ID
     /// </summary>
-    public Guid CreatedByUserId { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
     /// 创建人用户实体
     /// </summary>
-    public User CreatedByUser { get; set; } = null!;
+    public User? CreatedByUser { get; set; }
 
     /// <summary>
     /// 评论内容

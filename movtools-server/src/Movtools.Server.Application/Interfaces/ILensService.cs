@@ -204,7 +204,7 @@ public record LensResult
 /// <summary>
 /// 镜头状态历史结果
 /// </summary>
-public record LensStatusHistoryResult(Guid Id, Guid LensId, string FromStatus, string ToStatus, Guid ChangedByUserId, string ChangedByUserName, string? Comment, DateTimeOffset CreatedAtUtc);
+public record LensStatusHistoryResult(Guid Id, Guid LensId, string FromStatus, string ToStatus, Guid? ChangedByUserId, string ChangedByUserName, string? Comment, DateTimeOffset CreatedAtUtc);
 
 public record UpdateLensStatusHistoryRequest(string? Comment);
 

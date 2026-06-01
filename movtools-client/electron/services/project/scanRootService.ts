@@ -38,12 +38,6 @@ interface ScanRootRow {
   update_time: string;
 }
 
-interface LegacyScanRootFields {
-  maCheckPath?: string | null;
-  movCheckPath?: string | null;
-  layoutCheckPath?: string | null;
-}
-
 interface ScopeIds {
   projectId: string;
   episodeId: string;
@@ -65,34 +59,6 @@ export function ensureScanRootTable(database: DatabaseSync): void {
       update_time TEXT NOT NULL
     );
   `);
-}
-
-export function migrateLegacyScanRoots(
-  database: DatabaseSync,
-  scope: ScopeIds,
-  legacy: LegacyScanRootFields,
-  now: string,
-): void {
-  ensureScanRootTable(database);
-
-  const entries: Array<{ scopeType: 'project' | 'episode'; scopeId: string; fileKind: ScanRootFileKind; label: string; path: string; priority: number }> = [];
-  if (legacy.maCheckPath?.trim() && !hasExistingRoot(database, 'project', scope.projectId, 'ma')) {
-    entries.push({ scopeType: 'project', scopeId: scope.projectId, fileKind: 'ma', label: '默认 MA 根目录', path: legacy.maCheckPath.trim(), priority: 100 });
-  }
-  if (legacy.movCheckPath?.trim() && !hasExistingRoot(database, 'project', scope.projectId, 'mov')) {
-    entries.push({ scopeType: 'project', scopeId: scope.projectId, fileKind: 'mov', label: '默认视频根目录', path: legacy.movCheckPath.trim(), priority: 100 });
-  }
-  if (legacy.layoutCheckPath?.trim() && !hasExistingRoot(database, 'episode', scope.episodeId, 'layout')) {
-    entries.push({ scopeType: 'episode', scopeId: scope.episodeId, fileKind: 'layout', label: '默认 Layout 根目录', path: legacy.layoutCheckPath.trim(), priority: 100 });
-  }
-
-  const insert = database.prepare(`
-    INSERT INTO scan_root (root_id, scope_type, scope_id, file_kind, root_label, root_path, init_excel_path, priority, is_enabled, create_time, update_time)
-    VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?)
-  `);
-  entries.forEach((entry) => {
-    insert.run(createCompactId(), entry.scopeType, entry.scopeId, entry.fileKind, entry.label, entry.path, entry.priority, now, now);
-  });
 }
 
 export function readConfiguredScanRoots(database: DatabaseSync, scope: ScopeIds): Record<ScanRootFileKind, ConfiguredScanRoot[]> {
@@ -276,13 +242,6 @@ function mergeLensRoots(maRoots: ConfiguredScanRoot[], movRoots: ConfiguredScanR
   });
 
   return [...merged.values()].sort((left, right) => left.priority - right.priority || left.label.localeCompare(right.label, 'zh-CN') || left.absolutePath.localeCompare(right.absolutePath, 'zh-CN'));
-}
-
-function hasExistingRoot(database: DatabaseSync, scopeType: 'project' | 'episode', scopeId: string, fileKind: ScanRootFileKind): boolean {
-  const row = database.prepare(`
-    SELECT root_id FROM scan_root WHERE scope_type = ? AND scope_id = ? AND file_kind = ? LIMIT 1
-  `).get(scopeType, scopeId, fileKind) as { root_id: string } | undefined;
-  return Boolean(row?.root_id);
 }
 
 function createCompactId(): string {

@@ -41,7 +41,6 @@ import { projectService } from '../project/projectService';
 import {
   getLensLayoutRootConflictMessage,
   getEnabledScanRootPaths,
-  migrateLegacyScanRoots,
   readGroupedConfiguredScanRoots,
   replaceLayoutScanRoots,
   replaceLensScanRoots,
@@ -54,8 +53,6 @@ interface ProjectRow {
   project_id: string;
   project_name: string;
   project_root_path: string;
-  ma_check_path: string | null;
-  mov_check_path: string | null;
   layout_check_path: string | null;
   create_time: string;
   update_time: string;
@@ -202,20 +199,12 @@ class FileCheckService {
     await this.hydrateMissingLayoutVideoBindings(activeContext);
 
     return this.withDatabase(activeContext.project.databasePath, (database) => {
-      const project = readProjectRow(database);
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: project?.ma_check_path,
-        movCheckPath: project?.mov_check_path,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
       const groupedRoots = readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
       });
+      const visibleLensRoots = stripLegacyDefaultRoots(groupedRoots.lens, activeContext.episode.lensFolderRootPath, 'lens');
+      const visibleLayoutRoots = stripLegacyDefaultRoots(groupedRoots.layout, activeContext.episode.layoutCheckPath, 'layout');
       const records = readFileCheckRecords(database, activeContext.episode.episodeId);
       const bindings = readLensBindings(database, activeContext.episode.episodeId, activeContext.project.projectRootPath);
       const layoutCandidates = readLayoutCandidates(database, activeContext.episode.episodeId, activeContext.project.projectRootPath);
@@ -233,8 +222,8 @@ class FileCheckService {
           layoutTag: normalizeNamingTag(activeContext.episode.layoutTag, 'LAY'),
           lensFolderRootPath: activeContext.episode.lensFolderRootPath ?? '',
           layoutCheckPath: activeContext.episode.layoutCheckPath ?? '',
-          lensRoots: groupedRoots.lens.map((root) => ({ ...root, fileKind: 'ma' })),
-          layoutRoots: groupedRoots.layout.map((root) => ({ ...root, fileKind: 'layout' })),
+          lensRoots: visibleLensRoots.map((root) => ({ ...root, fileKind: 'ma' })),
+          layoutRoots: visibleLayoutRoots.map((root) => ({ ...root, fileKind: 'layout' })),
         },
         records,
         bindings,
@@ -255,21 +244,31 @@ class FileCheckService {
 
     const now = formatDateTime(new Date());
     return this.withDatabase(activeContext.project.databasePath, (database) => {
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: activeContext.project.maCheckPath,
-        movCheckPath: activeContext.project.movCheckPath,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
       const groupedRoots = readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
       });
+      const preserveLegacyLensFallback = shouldPreserveLegacyFallbackRoots(
+        request.lensRoots,
+        groupedRoots.lens,
+        activeContext.episode.lensFolderRootPath,
+        'lens',
+      );
+      const preserveLegacyLayoutFallback = shouldPreserveLegacyFallbackRoots(
+        request.layoutRoots,
+        groupedRoots.layout,
+        activeContext.episode.layoutCheckPath,
+        'layout',
+      );
 
-      const normalizedLensRoots = normalizeScanRootItems(request.lensRoots, 'ma');
-      const normalizedLayoutRoots = normalizeScanRootItems(request.layoutRoots ?? groupedRoots.layout, 'layout');
+      const normalizedLensRoots = normalizeScanRootItems(
+        preserveLegacyLensFallback ? groupedRoots.lens : request.lensRoots,
+        'ma',
+      );
+      const normalizedLayoutRoots = normalizeScanRootItems(
+        preserveLegacyLayoutFallback ? groupedRoots.layout : (request.layoutRoots ?? groupedRoots.layout),
+        'layout',
+      );
       const rootConflictMessage = getLensLayoutRootConflictMessage(normalizedLensRoots, normalizedLayoutRoots);
       if (rootConflictMessage) {
         return { success: false, error: rootConflictMessage } satisfies FileCheckMutationResponse;
@@ -290,12 +289,6 @@ class FileCheckService {
       const primaryLayoutPath = normalizedLayoutRoots
         .filter((root) => root.isEnabled && root.absolutePath.trim())
         .sort((left, right) => left.priority - right.priority || left.label.localeCompare(right.label, 'zh-CN'))[0]?.absolutePath ?? '';
-
-      database.prepare(`
-        UPDATE project
-        SET ma_check_path = ?, mov_check_path = ?, update_time = ?
-        WHERE project_id = ?
-      `).run(nullable(primaryLensPath), nullable(primaryLensPath), now, activeContext.project.projectId);
 
       database.prepare(`UPDATE episode SET lens_folder_root_path = ?, layout_check_path = ?, layout_tag = ?, update_time = ? WHERE episode_id = ?`)
         .run(nullable(primaryLensPath), nullable(primaryLayoutPath), normalizeNamingTag(request.layoutTag, 'LAY'), now, activeContext.episode.episodeId);
@@ -407,7 +400,7 @@ class FileCheckService {
     const normalizedLensRoots = normalizeScanRootItems(lensRoots, 'ma');
     const normalizedLayoutRoots = normalizeScanRootItems(layoutRoots, 'layout');
     const maScanPaths = getEnabledScanRootPaths(normalizedLensRoots, activeContext.episode.lensFolderRootPath);
-    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath, activeContext.project.movCheckPath);
+    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath);
     const layoutScanPaths = getEnabledScanRootPaths(normalizedLayoutRoots);
     const maFiles = await collectBoundFilesFromRoots(maScanPaths, '.ma', activeContext.project.projectRootPath);
     const movFiles = await collectBoundFilesFromRoots(movScanPaths, VIDEO_FILE_EXTENSIONS, activeContext.project.projectRootPath);
@@ -482,24 +475,14 @@ class FileCheckService {
 
     const normalizedLensRoots = normalizeScanRootItems(state.config.lensRoots, 'ma');
     const maScanPaths = getEnabledScanRootPaths(normalizedLensRoots, activeContext.episode.lensFolderRootPath);
-    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath, activeContext.project.movCheckPath);
+    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath);
     if (maScanPaths.length === 0 && movScanPaths.length === 0) {
-      return { success: false, error: '请先配置 ma / mov（拍屏）筛查路径，或先设置当前集镜头文件根目录。' };
+      return { success: false, error: '请先配置当前集镜头文件根目录。' };
     }
 
     const maFiles = await collectBoundFilesFromRoots(maScanPaths, '.ma', activeContext.project.projectRootPath);
     const movFiles = await collectBoundFilesFromRoots(movScanPaths, VIDEO_FILE_EXTENSIONS, activeContext.project.projectRootPath);
     const groupedRoots = this.withDatabase(activeContext.project.databasePath, (database) => {
-      const project = readProjectRow(database);
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: project?.ma_check_path,
-        movCheckPath: project?.mov_check_path,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
       return readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
@@ -733,10 +716,10 @@ class FileCheckService {
     const normalizedLayoutRoots = normalizeScanRootItems(state.config.layoutRoots, 'layout');
     const { layoutTag, versionTag } = state.config;
     const maScanPaths = getEnabledScanRootPaths(normalizedLensRoots, activeContext.episode.lensFolderRootPath);
-    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath, activeContext.project.movCheckPath);
+    const movScanPaths = resolveMovScanPaths(normalizedLensRoots, activeContext.project.projectRootPath, activeContext.episode.lensFolderRootPath);
     const layoutScanPaths = getEnabledScanRootPaths(normalizedLayoutRoots);
     if (mode === 'all' && maScanPaths.length === 0 && movScanPaths.length === 0 && layoutScanPaths.length === 0) {
-      return { success: false, error: '请至少配置 ma、mov（拍屏）或 layout 的筛查路径；未配置 ma/mov 时会默认使用当前集镜头文件根目录。' };
+      return { success: false, error: '请至少配置当前集镜头文件根目录或 Layout 根目录。' };
     }
     if (mode === 'layout' && layoutScanPaths.length === 0) {
       return { success: false, error: '请先配置当前集的 layout Maya 根目录。' };
@@ -936,26 +919,33 @@ class FileCheckService {
     const now = formatDateTime(new Date());
 
     const response = this.withDatabase(activeContext.project.databasePath, (database) => {
-      const candidate = database.prepare(`
-        SELECT candidate_id FROM lens_layout_candidate WHERE episode_id = ? AND lens_code = ? AND candidate_id = ?
-      `).get(activeContext.episode.episodeId, request.lensCode, request.candidateId) as { candidate_id: string } | undefined;
-      if (!candidate) {
+      const candidateId = request.candidateId.trim();
+      const candidate = candidateId
+        ? database.prepare(`
+          SELECT candidate_id FROM lens_layout_candidate WHERE episode_id = ? AND lens_code = ? AND candidate_id = ?
+        `).get(activeContext.episode.episodeId, request.lensCode, candidateId) as { candidate_id: string } | undefined
+        : undefined;
+      if (candidateId && !candidate) {
         return { success: false, error: '未找到要绑定视频的 Layout Maya 候选。' } satisfies FileCheckMutationResponse;
       }
 
-      const existing = database.prepare(`
-        SELECT binding_id FROM lens_layout_video_binding WHERE episode_id = ? AND candidate_id = ?
-      `).get(activeContext.episode.episodeId, request.candidateId) as { binding_id: string } | undefined;
+      const existing = candidateId
+        ? database.prepare(`
+          SELECT binding_id FROM lens_layout_video_binding WHERE episode_id = ? AND candidate_id = ?
+        `).get(activeContext.episode.episodeId, candidateId) as { binding_id: string } | undefined
+        : database.prepare(`
+          SELECT binding_id FROM lens_layout_video_binding WHERE episode_id = ? AND lens_code = ? AND (candidate_id IS NULL OR candidate_id = '')
+        `).get(activeContext.episode.episodeId, request.lensCode) as { binding_id: string } | undefined;
 
       if (existing) {
         database.prepare(`
-          UPDATE lens_layout_video_binding SET file_relative_path = ?, file_name = ?, source_root = ?, bind_time = ? WHERE binding_id = ?
-        `).run(storedPath, fileName, path.dirname(absoluteFilePath), now, existing.binding_id);
+          UPDATE lens_layout_video_binding SET candidate_id = ?, file_relative_path = ?, file_name = ?, source_root = ?, bind_time = ? WHERE binding_id = ?
+        `).run(candidateId || null, storedPath, fileName, path.dirname(absoluteFilePath), now, existing.binding_id);
       } else {
         database.prepare(`
           INSERT INTO lens_layout_video_binding (binding_id, episode_id, lens_code, candidate_id, file_relative_path, file_name, source_root, bind_time)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(createCompactId(), activeContext.episode.episodeId, request.lensCode, request.candidateId, storedPath, fileName, path.dirname(absoluteFilePath), now);
+        `).run(createCompactId(), activeContext.episode.episodeId, request.lensCode, candidateId || null, storedPath, fileName, path.dirname(absoluteFilePath), now);
       }
 
       return { success: true } satisfies FileCheckMutationResponse;
@@ -965,7 +955,7 @@ class FileCheckService {
       return response;
     }
 
-    const syncResponse = await this.syncLensFrameFromCurrentLayoutVideo(activeContext, request.lensCode, request.candidateId);
+    const syncResponse = await this.syncLensFrameFromCurrentLayoutVideo(activeContext, request.lensCode, request.candidateId || undefined);
     return syncResponse.success
       ? response
       : { success: false, error: `Layout 视频已绑定，但帧数初始化失败：${syncResponse.error}` };
@@ -1019,16 +1009,6 @@ class FileCheckService {
 
   private async refreshAutoMatchedLayoutVideoBinding(activeContext: ActiveContext, lensCode: string): Promise<FileCheckMutationResponse> {
     const groupedRoots = this.withDatabase(activeContext.project.databasePath, (database) => {
-      const project = readProjectRow(database);
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: project?.ma_check_path,
-        movCheckPath: project?.mov_check_path,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
       return readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
@@ -1059,17 +1039,6 @@ class FileCheckService {
 
   private async syncLensFrameFromCurrentLayoutVideo(activeContext: ActiveContext, lensCode: string, candidateId?: string): Promise<FileCheckMutationResponse> {
     const snapshot = this.withDatabase(activeContext.project.databasePath, (database) => {
-      const project = readProjectRow(database);
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: project?.ma_check_path,
-        movCheckPath: project?.mov_check_path,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
-
       const groupedRoots = readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
@@ -1121,17 +1090,6 @@ class FileCheckService {
 
   private async hydrateMissingLayoutVideoBindings(activeContext: ActiveContext): Promise<void> {
     const hydrationContext = this.withDatabase(activeContext.project.databasePath, (database) => {
-      const project = readProjectRow(database);
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeContext.project.projectId,
-        episodeId: activeContext.episode.episodeId,
-      }, {
-        maCheckPath: project?.ma_check_path,
-        movCheckPath: project?.mov_check_path,
-        layoutCheckPath: activeContext.episode.layoutCheckPath,
-      }, now);
-
       const groupedRoots = readGroupedConfiguredScanRoots(database, {
         projectId: activeContext.project.projectId,
         episodeId: activeContext.episode.episodeId,
@@ -1186,7 +1144,7 @@ class FileCheckService {
 
 function readProjectRow(database: DatabaseSync): ProjectRow | null {
   const row = database.prepare(`
-    SELECT project_id, project_name, project_root_path, ma_check_path, mov_check_path, layout_check_path, create_time, update_time
+    SELECT project_id, project_name, project_root_path, layout_check_path, create_time, update_time
     FROM project LIMIT 1
   `).get() as ProjectRow | undefined;
   return row ?? null;
@@ -1468,7 +1426,7 @@ function mapLayoutVideoBindingRow(row: LayoutVideoBindingRow, projectRootPath: s
   const absolutePath = resolveStoredPath(projectRootPath, row.file_relative_path);
   return {
     bindingId: row.binding_id,
-    candidateId: row.candidate_id,
+    candidateId: row.candidate_id || undefined,
     lensCode: row.lens_code,
     fileName: row.file_name,
     relativePath: row.file_relative_path,
@@ -2147,7 +2105,8 @@ function scoreLayoutVideoFileMatch(
 
   const baseNameWithoutVersion = normalizedVideoStem;
   const fileVersion = extractVersionNumber(baseName);
-  if (!hasLayoutVideoKeyword(baseNameWithoutVersion)) {
+  const exactLensStemMatch = baseNameWithoutVersion === normalizedLensCode;
+  if (!hasLayoutVideoKeyword(baseNameWithoutVersion) && !exactLensStemMatch) {
     return 0;
   }
 
@@ -2156,7 +2115,7 @@ function scoreLayoutVideoFileMatch(
     score += 400;
   } else if (baseNameWithoutVersion.startsWith(`${normalizedLensCode}_`)) {
     score += 320;
-  } else if (baseNameWithoutVersion === normalizedLensCode) {
+  } else if (exactLensStemMatch) {
     score += 240;
   }
   if (fileVersion !== null) {
@@ -2457,12 +2416,66 @@ function normalizeScanRootItems(items: ScanRootConfigItem[], fileKind: 'ma' | 'm
     .filter((item) => item.absolutePath.length > 0);
 }
 
-function resolveMovScanPaths(roots: ConfiguredScanRoot[], projectRootPath: string, lensFolderRootPath?: string, movCheckPath?: string): string[] {
+function stripLegacyDefaultRoots(
+  roots: ConfiguredScanRoot[],
+  legacyPath: string | undefined,
+  kind: 'lens' | 'layout',
+): ConfiguredScanRoot[] {
+  const normalizedLegacyPath = normalizeComparableRootPath(legacyPath);
+  if (!normalizedLegacyPath) {
+    return roots;
+  }
+
+  return roots.filter((root) => {
+    if (!isLegacyDefaultRootLabel(root.label, kind)) {
+      return true;
+    }
+
+    return normalizeComparableRootPath(root.absolutePath) !== normalizedLegacyPath;
+  });
+}
+
+function shouldPreserveLegacyFallbackRoots(
+  requestRoots: ScanRootConfigItem[] | undefined,
+  currentRoots: ConfiguredScanRoot[],
+  legacyPath: string | undefined,
+  kind: 'lens' | 'layout',
+): boolean {
+  if ((requestRoots ?? []).length > 0) {
+    return false;
+  }
+
+  const normalizedLegacyPath = normalizeComparableRootPath(legacyPath);
+  if (!normalizedLegacyPath) {
+    return false;
+  }
+
+  return currentRoots.some((root) => (
+    isLegacyDefaultRootLabel(root.label, kind)
+    && normalizeComparableRootPath(root.absolutePath) === normalizedLegacyPath
+  ));
+}
+
+function isLegacyDefaultRootLabel(label: string, kind: 'lens' | 'layout'): boolean {
+  const normalizedLabel = label.trim();
+  return kind === 'layout'
+    ? normalizedLabel === '默认 Layout 根目录'
+    : normalizedLabel === '默认镜头文件根目录';
+}
+
+function normalizeComparableRootPath(value: string | undefined): string {
+  return (value ?? '')
+    .trim()
+    .replace(/[\\/]+/g, '\\')
+    .replace(/[\\/]+$/, '')
+    .toUpperCase();
+}
+
+function resolveMovScanPaths(roots: ConfiguredScanRoot[], projectRootPath: string, lensFolderRootPath?: string): string[] {
   const configured = getEnabledScanRootPaths(roots, lensFolderRootPath);
   const extraRoots = [
     ...collectMovScanFallbackRoots(projectRootPath, lensFolderRootPath),
     ...findMovEpisodeFolders(projectRootPath, lensFolderRootPath),
-    ...(movCheckPath?.trim() ? [path.normalize(movCheckPath.trim())] : []),
   ];
   return Array.from(new Set([...extraRoots, ...configured]));
 }

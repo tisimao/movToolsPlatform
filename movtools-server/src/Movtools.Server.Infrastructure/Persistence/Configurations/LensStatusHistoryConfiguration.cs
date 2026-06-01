@@ -24,6 +24,6 @@ public sealed class LensStatusHistoryConfiguration : IEntityTypeConfiguration<Le
         builder.HasOne(x => x.ChangedByUser)
             .WithMany()
             .HasForeignKey(x => x.ChangedByUserId)
-            .OnDelete(DeleteBehavior.Restrict);
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }

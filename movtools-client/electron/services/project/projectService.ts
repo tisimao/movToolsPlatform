@@ -812,8 +812,8 @@ class ProjectService {
           );
         }
 
-        database.prepare(`UPDATE project SET lens_folder_root_path = COALESCE(?, lens_folder_root_path), ma_check_path = COALESCE(?, ma_check_path), mov_check_path = COALESCE(?, mov_check_path), layout_check_path = COALESCE(?, layout_check_path), update_time = ? WHERE project_id = ?`)
-          .run(lensFolderRootPath, lensFolderRootPath, lensFolderRootPath, layoutCheckPath, now, project.projectId);
+        database.prepare(`UPDATE project SET lens_folder_root_path = COALESCE(?, lens_folder_root_path), layout_check_path = COALESCE(?, layout_check_path), update_time = ? WHERE project_id = ?`)
+          .run(lensFolderRootPath, layoutCheckPath, now, project.projectId);
 
         database.exec('COMMIT');
       } catch (error) {
@@ -982,10 +982,12 @@ class ProjectService {
       `).all(projectId) as unknown as RawEpisodeRow[]).map((row) => {
         const episode = mapEpisodeRow(row);
         const groupedRoots = readGroupedConfiguredScanRoots(database, { projectId, episodeId: row.episode_id });
+        const visibleLensRoots = stripLegacyDefaultRoots(groupedRoots.lens, episode.lensFolderRootPath, 'lens');
+        const visibleLayoutRoots = stripLegacyDefaultRoots(groupedRoots.layout, episode.layoutCheckPath, 'layout');
         return {
           ...episode,
-          lensRoots: toScanRootItems(groupedRoots.lens, 'ma'),
-          layoutRoots: toScanRootItems(groupedRoots.layout, 'layout'),
+          lensRoots: toScanRootItems(visibleLensRoots, 'ma'),
+          layoutRoots: toScanRootItems(visibleLayoutRoots, 'layout'),
         } satisfies EpisodeSummary;
       });
     } catch {
@@ -1157,16 +1159,16 @@ async function createEpisodeInProject(project: ProjectSummary, request: CreateEp
     if (!lensRootStat.isDirectory()) {
       return {
         success: false,
-        error: `镜头根目录不是文件夹：${lensFolderRootPath}`,
+        error: `镜头文件根目录不是文件夹：${lensFolderRootPath}`,
         initResult: {
           status: 'failed',
-          message: `镜头根目录不是文件夹：${lensFolderRootPath}`,
+          message: `镜头文件根目录不是文件夹：${lensFolderRootPath}`,
           excelImportAttempted,
           excelImportSuccess: false,
           lensFoldersPlanned: lensFolderPlanned,
           lensFoldersCreated: 0,
           pendingClientActions: [],
-          errors: [`镜头根目录不是文件夹：${lensFolderRootPath}`],
+          errors: [`镜头文件根目录不是文件夹：${lensFolderRootPath}`],
         },
       };
     }
@@ -1404,15 +1406,15 @@ async function createLensFoldersFromPlans(plans: ProjectLensFolderPlan[]): Promi
       const rootStat = await stat(rootPath);
       if (!rootStat.isDirectory()) {
         failedRootPaths.add(rootPath);
-        errors.push(`镜头根目录不是文件夹：${rootPath}`);
+        errors.push(`镜头文件根目录不是文件夹：${rootPath}`);
       }
     } catch (error) {
       failedRootPaths.add(rootPath);
       errors.push(error instanceof Error && 'code' in error && error.code === 'ENOENT'
-        ? `镜头根目录缺失：${rootPath}`
+        ? `镜头文件根目录缺失：${rootPath}`
         : error instanceof Error
           ? error.message
-          : `镜头根目录检查失败：${rootPath}`);
+          : `镜头文件根目录检查失败：${rootPath}`);
     }
   }
 
@@ -1553,7 +1555,7 @@ async function seedLensesFromRootExcels(databasePath: string, episode: EpisodeSu
       for (const row of validRows) {
         const rootStat = await stat(row.targetRootPath);
         if (!rootStat.isDirectory()) {
-          return { success: false, error: `镜头根目录不是文件夹：${row.targetRootPath}` };
+          return { success: false, error: `镜头文件根目录不是文件夹：${row.targetRootPath}` };
         }
         const folderResult = await ensureLensFolder(row.targetRootPath, resolveLensFolderName(row.lensName, row.lensCode));
         if (folderResult.created) {
@@ -1735,7 +1737,7 @@ function normalizeRootInput(items: ScanRootConfigItem[] | undefined, fallbackPat
   return [{
     rootId: createCompactId(),
     fileKind: fallbackKind,
-    label: fallbackKind === 'layout' ? '默认 Layout 根目录' : '默认镜头根目录',
+    label: fallbackKind === 'layout' ? '默认 Layout 根目录' : '默认镜头文件根目录',
     absolutePath: normalizedFallback,
     initExcelPath: undefined,
     priority: 100,
@@ -1759,6 +1761,40 @@ function toScanRootItems(roots: ConfiguredScanRoot[], fileKind: 'ma' | 'layout')
     priority: root.priority,
     isEnabled: root.isEnabled,
   }));
+}
+
+function stripLegacyDefaultRoots(
+  roots: ConfiguredScanRoot[],
+  legacyPath: string | undefined,
+  kind: 'lens' | 'layout',
+): ConfiguredScanRoot[] {
+  const normalizedLegacyPath = normalizeComparableRootPath(legacyPath);
+  if (!normalizedLegacyPath) {
+    return roots;
+  }
+
+  return roots.filter((root) => {
+    if (!isLegacyDefaultRootLabel(root.label, kind)) {
+      return true;
+    }
+
+    return normalizeComparableRootPath(root.absolutePath) !== normalizedLegacyPath;
+  });
+}
+
+function isLegacyDefaultRootLabel(label: string, kind: 'lens' | 'layout'): boolean {
+  const normalizedLabel = label.trim();
+  return kind === 'layout'
+    ? normalizedLabel === '默认 Layout 根目录'
+    : normalizedLabel === '默认镜头文件根目录';
+}
+
+function normalizeComparableRootPath(value: string | undefined): string {
+  return (value ?? '')
+    .trim()
+    .replace(/[\\/]+/g, '\\')
+    .replace(/[\\/]+$/, '')
+    .toUpperCase();
 }
 
 function normalizeProjectDefaultFps(value?: number): number {

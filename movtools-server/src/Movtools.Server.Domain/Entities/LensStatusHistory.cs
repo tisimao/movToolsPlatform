@@ -28,12 +28,12 @@ public sealed class LensStatusHistory : EntityBase
     /// <summary>
     /// 变更人用户ID
     /// </summary>
-    public Guid ChangedByUserId { get; set; }
+    public Guid? ChangedByUserId { get; set; }
 
     /// <summary>
     /// 变更人用户实体
     /// </summary>
-    public User ChangedByUser { get; set; } = null!;
+    public User? ChangedByUser { get; set; }
 
     /// <summary>
     /// 备注

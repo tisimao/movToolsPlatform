@@ -14,8 +14,6 @@ export interface ProjectDatabaseBootstrap {
   projectName: string;
   projectRootPath: string;
   lensFolderRootPath?: string;
-  maCheckPath?: string;
-  movCheckPath?: string;
   layoutCheckPath?: string;
   createdAt: string;
   updatedAt: string;
@@ -143,7 +141,7 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
         binding_id TEXT PRIMARY KEY NOT NULL,
         episode_id TEXT NOT NULL,
         lens_code TEXT NOT NULL,
-        candidate_id TEXT NOT NULL,
+        candidate_id TEXT,
         file_relative_path TEXT NOT NULL,
         file_name TEXT NOT NULL,
         source_root TEXT,
@@ -308,7 +306,7 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
         binding_id TEXT PRIMARY KEY NOT NULL,
         episode_id TEXT NOT NULL,
         lens_code TEXT NOT NULL,
-        candidate_id TEXT NOT NULL,
+        candidate_id TEXT,
         file_relative_path TEXT NOT NULL,
         file_name TEXT NOT NULL,
         source_root TEXT,
@@ -342,6 +340,7 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
     `);
 
     migrateLensTableToEpisodeScoped(database);
+    migrateLayoutVideoBindingTable(database);
 
     database.prepare(`
       INSERT INTO project (
@@ -349,18 +348,14 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
         project_name,
         project_root_path,
         lens_folder_root_path,
-        ma_check_path,
-        mov_check_path,
         layout_check_path,
         create_time,
         update_time
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id) DO UPDATE SET
         project_name = excluded.project_name,
         project_root_path = excluded.project_root_path,
         lens_folder_root_path = excluded.lens_folder_root_path,
-        ma_check_path = excluded.ma_check_path,
-        mov_check_path = excluded.mov_check_path,
         layout_check_path = excluded.layout_check_path,
         update_time = excluded.update_time
     `).run(
@@ -368,8 +363,6 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
       payload.projectName,
       payload.projectRootPath,
       payload.lensFolderRootPath ?? null,
-      payload.maCheckPath ?? null,
-      payload.movCheckPath ?? null,
       payload.layoutCheckPath ?? null,
       payload.createdAt,
       payload.updatedAt,
@@ -377,6 +370,34 @@ export async function initializeProjectDatabase(databasePath: string, payload: P
   } finally {
     database.close();
   }
+}
+
+function migrateLayoutVideoBindingTable(database: DatabaseSync): void {
+  const columns = database.prepare(`PRAGMA table_info('lens_layout_video_binding')`).all() as Array<{ name: string; notnull: number }>;
+  const candidateColumn = columns.find((column) => column.name === 'candidate_id');
+  if (!candidateColumn || candidateColumn.notnull === 0) {
+    return;
+  }
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS lens_layout_video_binding__migrated (
+      binding_id TEXT PRIMARY KEY NOT NULL,
+      episode_id TEXT NOT NULL,
+      lens_code TEXT NOT NULL,
+      candidate_id TEXT,
+      file_relative_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      source_root TEXT,
+      bind_time TEXT NOT NULL
+    );
+
+    INSERT INTO lens_layout_video_binding__migrated (binding_id, episode_id, lens_code, candidate_id, file_relative_path, file_name, source_root, bind_time)
+    SELECT binding_id, episode_id, lens_code, candidate_id, file_relative_path, file_name, source_root, bind_time
+    FROM lens_layout_video_binding;
+
+    DROP TABLE lens_layout_video_binding;
+    ALTER TABLE lens_layout_video_binding__migrated RENAME TO lens_layout_video_binding;
+  `);
 }
 
 function migrateLensTableToEpisodeScoped(database: DatabaseSync): void {

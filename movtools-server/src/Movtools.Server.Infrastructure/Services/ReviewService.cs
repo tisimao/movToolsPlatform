@@ -1789,7 +1789,7 @@ public sealed class ReviewService : IReviewService
             feedback.Id,
             feedback.ReviewTaskId,
             feedback.CreatedByUserId,
-            feedback.CreatedByUserName ?? feedback.CreatedByUser.DisplayName,
+            feedback.CreatedByUserName ?? feedback.CreatedByUser?.DisplayName ?? "unknown",
             feedback.Content,
             feedback.DecisionCode,
             feedback.FrameNumber,

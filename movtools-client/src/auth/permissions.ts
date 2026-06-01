@@ -19,6 +19,8 @@ export interface NavigationItem {
   allowedRoles: AppRole[];
 }
 
+const rolePriority: string[] = ['system-admin', 'admin', 'producer', 'director', 'maker', 'viewer'];
+
 /**
  * 角色中文标签映射
  */
@@ -48,13 +50,32 @@ export const navigationItems: NavigationItem[] = [
   { id: 'users', label: '用户', description: '用户与权限管理。', allowedRoles: ['admin', 'system-admin'] },
 ];
 
+const roleAliasMap: Record<string, string> = {
+  admin: 'admin',
+  administrator: 'admin',
+  'system-admin': 'system-admin',
+  systemadmin: 'system-admin',
+  '系统管理员': 'system-admin',
+  producer: 'producer',
+  '制片': 'producer',
+  director: 'director',
+  '导演': 'director',
+  maker: 'maker',
+  '制作人员': 'maker',
+  '制作': 'maker',
+  viewer: 'viewer',
+  readonly: 'viewer',
+  '只读查看者': 'viewer',
+};
+
 /**
- * 标准化角色名称（转小写并去除首尾空格）
+ * 标准化角色名称（转小写并去除首尾空格，并兼容中文/别名角色）
  * @param value 角色名称
  * @returns 标准化后的角色名称
  */
 function normalizeRole(value: string): string {
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  return roleAliasMap[normalized] ?? roleAliasMap[value.trim()] ?? normalized;
 }
 
 /**
@@ -63,8 +84,14 @@ function normalizeRole(value: string): string {
  * @returns 主要角色（如果没有角色则返回'viewer'）
  */
 export function getPrimaryRole(user: AuthUser | null): string {
-  const firstRole = user?.roles?.[0];
-  return normalizeRole(firstRole ?? 'viewer');
+  const roles = (user?.roles ?? []).map(normalizeRole);
+  const prioritizedRole = rolePriority.find((role) => roles.includes(role));
+  return prioritizedRole ?? roles[0] ?? 'viewer';
+}
+
+function getNormalizedRoles(user: AuthUser | null): string[] {
+  const roles = (user?.roles ?? []).map(normalizeRole).filter(Boolean);
+  return roles.length > 0 ? [...new Set(roles)] : ['viewer'];
 }
 
 /**
@@ -92,13 +119,13 @@ export function formatRoleList(roles: Array<string | null | undefined>): string 
  * @returns 是否可以访问
  */
 export function canAccessNavigation(user: AuthUser | null, item: NavigationItem): boolean {
-  const role = getPrimaryRole(user);
-  if (item.allowedRoles.includes(role)) {
+  const roles = getNormalizedRoles(user);
+  if (roles.some((role) => item.allowedRoles.includes(role))) {
     return true;
   }
 
   // 系统管理员和admin可以访问所有导航项
-  if (role === 'system-admin' || role === 'admin') {
+  if (roles.includes('system-admin') || roles.includes('admin')) {
     return true;
   }
 
@@ -119,6 +146,6 @@ export function getVisibleNavigationItems(user: AuthUser | null): NavigationItem
  * 说明：该能力属于本地扫描/预览辅助，不等同于协同写权限。
  */
 export function canUseLocalFileChecks(user: AuthUser | null): boolean {
-  const role = getPrimaryRole(user);
-  return role === 'maker' || role === 'producer' || role === 'director' || role === 'admin' || role === 'system-admin';
+  const roles = getNormalizedRoles(user);
+  return roles.some((role) => role === 'maker' || role === 'producer' || role === 'director' || role === 'admin' || role === 'system-admin');
 }

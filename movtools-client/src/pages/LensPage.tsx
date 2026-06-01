@@ -44,7 +44,7 @@ type ReadinessFilter = 'all' | 'ready' | 'missing';
 /** 缺项类型筛选：全部 / 任意缺项 / 缺 ma / 缺 mov / 缺 layout */
 type MissingItemFilter = 'all' | 'any' | 'ma' | 'mov' | 'layout';
 /** 镜头列表排序字段 */
-type LensSortField = 'sequence' | 'lensCode' | 'updateTime' | 'versionNum' | 'maker';
+type LensSortField = 'lensCode' | 'updateTime' | 'versionNum' | 'maker' | 'sequence';
 /** 排序方向：升序 / 降序 */
 type SortDirection = 'asc' | 'desc';
 /** 问题类型筛选 */
@@ -316,6 +316,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
   /* ========== 选择与详情状态 ========== */
   const [selectedLensIds, setSelectedLensIds] = useState<string[]>([]);
   const [activeDetail, setActiveDetail] = useState<LensDetailPayload | null>(null);
+  const [detailLayoutScanRoots, setDetailLayoutScanRoots] = useState<string[]>([]);
   const [detailSearch, setDetailSearch] = useState('');
   const [isDetailLoading, setIsDetailLoading] = useState(false);
 
@@ -353,6 +354,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const listRequestSeqRef = useRef(0);          /** 列表请求序列号，用于丢弃过期响应 */
   const detailResizeRef = useRef<{ startX: number; startY: number; startWidth: number; startHeight: number } | null>(null);
   const detailRequestSeqRef = useRef(0);        /** 详情请求序列号，用于丢弃过期响应 */
+  const firstListScanSessionKeyRef = useRef<string | null>(null);
 
   /* ========== 视频预览状态 ========== */
   const productionVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -508,8 +510,15 @@ export function LensPage({ onNavigate }: LensPageProps) {
             <small className="muted">{lens.pendingDirectorFeedbackCount ?? 0} 条反馈</small>
           </div>
         );
-      case 'singleFrame':
-        return lens.singleFrame;
+      case 'singleFrame': {
+        const frameMismatchIssue = getFrameMismatchIssue(lens);
+        return (
+          <div className="lens-issue-stack">
+            <strong className={frameMismatchIssue ? 'danger-copy' : undefined}>{lens.singleFrame}</strong>
+            {frameMismatchIssue ? <small className="danger-copy">帧数不匹配</small> : null}
+          </div>
+        );
+      }
       case 'versionNum':
         return lens.versionNum || '-';
       case 'currentVersionReady':
@@ -711,6 +720,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
   function closeActiveDetail(): void {
     detailRequestSeqRef.current += 1;
     setActiveDetail(null);
+    setDetailLayoutScanRoots([]);
     setActiveReviewTaskId(null);
     setDirectorFeedbackView(null);
     setDirectorFeedbackSeekTarget(null);
@@ -740,6 +750,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
       setDetailModalSize(getDefaultDetailModalSize());
       setIsDetailModalMaximized(false);
       setActiveDetail(response.detail);
+      await refreshDetailLayoutScanRoots();
       setActiveReviewTaskId(response.detail.lens.latestReviewTaskId ?? null);
       await refreshDirectorFeedbacks(lensId, response.detail.lens.versionNum);
       setReworkRecordEditor(null);
@@ -777,6 +788,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
       if (response.success && response.detail && response.detail.lens.lensId === lensId) {
         setActiveDetail(response.detail);
+        await refreshDetailLayoutScanRoots();
         setActiveReviewTaskId(response.detail.lens.latestReviewTaskId ?? null);
         await refreshDirectorFeedbacks(lensId, response.detail.lens.versionNum);
       }
@@ -862,6 +874,10 @@ export function LensPage({ onNavigate }: LensPageProps) {
   /* ========== 监听工作区变更，自动刷新镜头列表 ========== */
   useEffect(() => {
     void refreshLenses();
+  }, [workspaceActiveEpisodeId, workspaceActiveProjectId]);
+
+  useEffect(() => {
+    void ensureInitialLocalFileScanForSession();
   }, [workspaceActiveEpisodeId, workspaceActiveProjectId]);
 
   /** 当镜头列表更新时，清除已不存在的镜头选中状态 */
@@ -1181,6 +1197,8 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
   /** 当前版本已绑定的 MOV（拍屏视频）绑定 */
   const currentMovBinding = useMemo(() => currentDetailVersion?.bindings.find((binding) => binding.fileType === 'mov') ?? null, [currentDetailVersion]);
+  /** 当前详情镜头的帧数不匹配问题 */
+  const currentFrameMismatchIssue = useMemo(() => activeDetail ? getFrameMismatchIssue(activeDetail.lens) : undefined, [activeDetail]);
   /** 当前版本的 MOV 匹配调试信息 */
   const currentMovDebug = useMemo(() => currentDetailVersion?.matchDebug.mov ?? null, [currentDetailVersion]);
   /** 当前采用的 Layout 候选（优先 isSelected，否则取第一个） */
@@ -1572,7 +1590,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
   /** 对单个镜头执行本地文件检查 */
   async function handleSingleLensCheck(lensId: string): Promise<void> {
-    const response = await window.movtools.fileCheck.scanLens({ lensId });
+    const response = await runSingleLensLocalFileScan(lensId);
     setResult(response);
     if (response.success) {
       await refreshLenses();
@@ -1610,36 +1628,25 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await refreshActiveDetail({ silent: true });
   }
 
-  /** 自动刷新指定镜头的文件绑定（优先用本地缓存，必要时请求服务端详情） */
+  /** 自动刷新指定镜头的文件匹配：统一走本地单镜头完整扫描 */
   async function autoRefreshLensBindings(lensIds: string[]): Promise<{ success: boolean; error?: string }> {
-    const lensById = new Map(lenses.map((lens) => [lens.lensId, lens] as const));
-    if (activeDetail?.lens.lensId) {
-      lensById.set(activeDetail.lens.lensId, activeDetail.lens);
-    }
-
-    return refreshAndSyncLensBindings({
-      lensIds,
-      resolveLens: (lensId) => lensById.get(lensId),
-      resolveLensDetail: async (lensId) => {
-        const response = await lensService.getLensDetail(lensId);
-        return response.success && response.detail ? response.detail : null;
-      },
-    });
-  }
-
-  /** 制作人员角色：在本地执行镜头文件绑定刷新与 Layout 扫描 */
-  async function refreshLocalLensBindings(lensIds: string[]): Promise<{ success: boolean; error?: string }> {
-    const refreshResponse = await window.movtools.fileCheck.refreshLensBindings({ lensIds });
-    if (!refreshResponse.success) {
-      return { success: false, error: refreshResponse.error ?? '自动文件匹配失败。' };
-    }
-
-    const layoutRefreshResponse = await window.movtools.fileCheck.scanLayout();
-    if (!layoutRefreshResponse.success) {
-      return { success: false, error: layoutRefreshResponse.error ?? 'Layout 文件匹配失败。' };
+    for (const lensId of lensIds) {
+      const response = await runSingleLensLocalFileScan(lensId);
+      if (!response.success) {
+        return response;
+      }
     }
 
     return { success: true };
+  }
+
+  /** 执行全镜头本地完整扫描 */
+  async function refreshLocalLensBindings(lensIds: string[]): Promise<{ success: boolean; error?: string }> {
+    if (lensIds.length === 0) {
+      return { success: false, error: '当前没有可刷新的镜头。' };
+    }
+
+    return runFullLocalFileScan();
   }
 
   /** 自动对指定镜头执行 Layout 引用排查 */
@@ -2076,7 +2083,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     await handleStatusChange(lens.lensId, 'close');
   }
 
-  /** 全量刷新镜头文件绑定：制作角色走本地，其他角色走服务端 */
+  /** 全量刷新镜头文件匹配：统一走本地完整扫描 */
   async function handleBatchRefreshBindings(): Promise<void> {
     if (lenses.length === 0) {
       setResult({ success: false, error: '当前没有可刷新的镜头。' });
@@ -2086,9 +2093,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setPendingBatchAction('refresh');
     try {
       const lensIds = lenses.map((lens) => lens.lensId);
-      const response = isMaker
-        ? await refreshLocalLensBindings(lensIds)
-        : await autoRefreshLensBindings(lensIds);
+      const response = await refreshLocalLensBindings(lensIds);
       setResult(response.success ? { success: true } : response);
       if (response.success) {
         await refreshLenses();
@@ -2262,48 +2267,13 @@ export function LensPage({ onNavigate }: LensPageProps) {
     setResult(response);
   }
 
-  /** 为 Layout 候选手动绑定视频文件（若未指定候选 ID 则先补充 Maya） */
+  /** 为 Layout 候选手动绑定视频文件；该按钮只处理视频文件 */
   async function handleAddLayoutVideoBinding(lensCode: string, candidateId?: string): Promise<void> {
     if (!activeDetail) {
       return;
     }
 
-    let resolvedCandidateId = candidateId;
-    if (!resolvedCandidateId) {
-      const layoutFilePath = await window.movtools.dialog.pickFile({
-        title: '先选择当前对应的Layout Maya 文件',
-        filters: [{ name: 'Maya ASCII', extensions: ['ma'] }],
-      });
-      if (!layoutFilePath) {
-        return;
-      }
-
-      const addCandidateResponse = await window.movtools.fileCheck.addLayoutCandidate({
-        lensCode,
-        filePath: layoutFilePath,
-        selectAfterAdd: true,
-      });
-      if (!addCandidateResponse.success) {
-        setResult(addCandidateResponse);
-        return;
-      }
-
-      await refreshStateAfterLayoutChange(addCandidateResponse);
-
-      const detailResponse = await lensService.getLensDetail(activeDetail.lens.lensId);
-      if (!detailResponse.success || !detailResponse.detail) {
-        setResult({ success: false, error: detailResponse.error ?? '读取新增 Layout 候选后的镜头详情失败。' });
-        return;
-      }
-
-      setActiveDetail(detailResponse.detail);
-      resolvedCandidateId = detailResponse.detail.layoutCandidates.find((candidate) => candidate.isSelected)?.candidateId
-        ?? detailResponse.detail.layoutCandidates[0]?.candidateId;
-      if (!resolvedCandidateId) {
-        setResult({ success: false, error: '已补充Layout Maya，但仍未找到可绑定视频的候选。' });
-        return;
-      }
-    }
+    const resolvedCandidateId = candidateId?.trim() ?? '';
 
     const filePath = await window.movtools.dialog.pickFile({
       title: '选择Layout视频文件',
@@ -2316,11 +2286,74 @@ export function LensPage({ onNavigate }: LensPageProps) {
 
     const response = await window.movtools.fileCheck.addLayoutVideoBinding({ lensCode, candidateId: resolvedCandidateId, filePath });
     if (response.success) {
-      await refreshStateAfterLayoutChange(response);
+      await refreshStateAfterLayoutVideoChange(lensCode, resolvedCandidateId, response);
       return;
     }
 
     setResult(response);
+  }
+
+  async function runFullLocalFileScan(): Promise<{ success: boolean; error?: string }> {
+    const response = await window.movtools.fileCheck.scan();
+    return response.success
+      ? { success: true }
+      : { success: false, error: response.error ?? '全量本地文件匹配扫描失败。' };
+  }
+
+  async function runSingleLensLocalFileScan(lensId: string): Promise<{ success: boolean; error?: string }> {
+    const response = await window.movtools.fileCheck.scanLens({ lensId });
+    return response.success
+      ? { success: true }
+      : { success: false, error: response.error ?? '单镜头本地文件匹配扫描失败。' };
+  }
+
+  async function ensureInitialLocalFileScanForSession(): Promise<void> {
+    if (!workspaceActiveProjectId || !workspaceActiveEpisodeId) {
+      return;
+    }
+
+    const sessionKey = `${workspaceActiveProjectId}::${workspaceActiveEpisodeId}`;
+    if (firstListScanSessionKeyRef.current === sessionKey) {
+      return;
+    }
+
+    firstListScanSessionKeyRef.current = sessionKey;
+    const scanResponse = await runFullLocalFileScan();
+    if (!scanResponse.success) {
+      setResult({ success: false, error: scanResponse.error ?? '首次进入镜头列表时执行本地文件匹配扫描失败。' });
+      return;
+    }
+
+    await refreshLenses();
+  }
+
+  async function refreshDetailLayoutScanRoots(): Promise<void> {
+    try {
+      const state = await window.movtools.fileCheck.getState();
+      if (!state.success) {
+        setDetailLayoutScanRoots([]);
+        return;
+      }
+
+      const enabledLayoutRoots = state.config.layoutRoots
+        .filter((root) => root.isEnabled && root.absolutePath.trim())
+        .sort((left, right) => left.priority - right.priority || left.label.localeCompare(right.label, 'zh-CN'))
+        .map((root) => root.absolutePath.trim());
+      const fallbackLayoutRoot = state.config.layoutCheckPath?.trim() ? [state.config.layoutCheckPath.trim()] : [];
+      setDetailLayoutScanRoots(Array.from(new Set([...enabledLayoutRoots, ...fallbackLayoutRoot])));
+    } catch {
+      setDetailLayoutScanRoots([]);
+    }
+  }
+
+  /** Layout 视频变更后只刷新当前绑定，避免重扫 Layout 候选导致手动替换被自动匹配覆盖 */
+  async function refreshStateAfterLayoutVideoChange(lensCode: string, candidateId: string, baseResponse?: { success: boolean; error?: string }): Promise<void> {
+    if (baseResponse) {
+      setResult(baseResponse);
+    }
+
+    await refreshLenses();
+    await refreshActiveDetail();
   }
 
   /** Layout 变更后刷新文件绑定和引用排查，并更新列表与详情 */
@@ -2532,11 +2565,11 @@ export function LensPage({ onNavigate }: LensPageProps) {
             <label className="field">
               <span>排序字段</span>
               <select onChange={(event) => setSortField(event.target.value as LensSortField)} value={sortField}>
-                <option value="sequence">镜头序号</option>
-                <option value="lensCode">镜头编号</option>
+                <option value="lensCode">镜头号</option>
                 <option value="updateTime">更新时间</option>
                 <option value="versionNum">版本号</option>
                 <option value="maker">制作人员</option>
+                <option value="sequence">场次</option>
               </select>
             </label>
 
@@ -2854,7 +2887,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                     {getLensMakerStatusLabel(getLensMakerMatchStatus(activeDetail.lens))}
                   </small>
                   {activeDetail.lens.makerNameRaw ? <small className="muted">原始线索：{activeDetail.lens.makerNameRaw}</small> : null}
-                  <small className="muted">场次 {activeDetail.lens.sceneNo || '—'} · {activeDetail.lens.singleFrame} 帧</small>
+                  <small className={currentFrameMismatchIssue ? 'danger-copy' : 'muted'}>场次 {activeDetail.lens.sceneNo || '—'} · {activeDetail.lens.singleFrame} 帧{currentFrameMismatchIssue ? ' · 帧数不匹配' : ''}</small>
                 </article>
                 {/* 版本文件完整性 */}
                 <article className="lens-summary-card">
@@ -3008,13 +3041,14 @@ export function LensPage({ onNavigate }: LensPageProps) {
                           <div className="lens-video-metric-pair-row">
                             <div>
                               <span className="lens-summary-label">预定帧数</span>
-                              <strong>{activeDetail.lens.singleFrame}</strong>
+                              <strong className={currentFrameMismatchIssue ? 'danger-copy' : undefined}>{activeDetail.lens.singleFrame}</strong>
                             </div>
                             <div>
                               <span className="lens-summary-label">总帧数</span>
-                              <strong>{currentMovBinding.mediaFrameCount ?? '—'}</strong>
+                              <strong className={currentFrameMismatchIssue ? 'danger-copy' : undefined}>{currentMovBinding.mediaFrameCount ?? '—'}</strong>
                             </div>
                           </div>
+                          {currentFrameMismatchIssue ? <small className="danger-copy">{currentFrameMismatchIssue.message}</small> : null}
                           <div className="lens-video-metric-pair-row">
                             <div>
                               <span className="lens-summary-label">帧率</span>
@@ -3249,6 +3283,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
                   <div>
                     <h4>Layout Maya 候选</h4>
                     <p className="muted">查看候选、当前采用项与引用排查结果。</p>
+                    <small className="muted">本机 Layout 匹配根目录：{detailLayoutScanRoots.length > 0 ? detailLayoutScanRoots.join('；') : '未读取到本机 Layout 根目录配置'}</small>
                   </div>
                   <div className="actions-row compact-actions wrap-actions">
                     <button className="secondary-button" disabled={isDetailLoading} onClick={() => void handleAddLayoutCandidate(activeDetail.lens.lensCode)} type="button">补充Layout</button>
@@ -3711,6 +3746,11 @@ function formatIssueSummary(issues: LensVersionIssue[]): string {
   return issues.map((issue) => issue.message).join('；');
 }
 
+/** 获取镜头当前版本的帧数不匹配问题 */
+function getFrameMismatchIssue(lens: LensRecord): LensVersionIssue | undefined {
+  return lens.currentVersionIssues.find((issue) => issue.reason === '帧数不匹配');
+}
+
 /** 获取镜头版本文件的提醒严重级别 */
 function getLensReminderSeverity(lens: LensRecord): 'ready' | 'warning' | 'blocked' {
   if (lens.currentVersionReady) {
@@ -3857,7 +3897,7 @@ function getVersionIssueTypeSummary(issues: LensVersionIssue[]): string {
 /** 获取镜头 Layout 状态的中文描述文本 */
 function getLayoutIssueTypeLabel(lens: LensRecord): string {
   if (lens.layoutReady && lens.layoutVideoReady) {
-    return lens.layoutCandidateCount > 1 ? 'Maya 与视频已匹配，可继续确认最佳版本' : 'Maya 与视频均可用';
+    return lens.layoutCandidateCount > 1 ? 'Layout 完全匹配，可继续确认最佳版本' : 'Layout 完全匹配';
   }
 
   if (lens.layoutReady || lens.layoutVideoReady) {
@@ -3901,7 +3941,7 @@ function getLayoutSummaryPillClassName(lens: LensRecord): string {
 /** 获取 Layout 摘要 Pill 的显示文本 */
 function getLayoutSummaryPillLabel(lens: LensRecord): string {
   const severity = getLayoutSummarySeverity(lens);
-  return severity === 'ready' ? 'Layout就绪' : severity === 'warning' ? 'Layout待补全' : 'Layout缺失';
+  return severity === 'ready' ? 'Layout完全匹配' : severity === 'warning' ? 'Layout部分匹配' : 'Layout缺失';
 }
 
 /** 获取 Layout 摘要的标题文本 */
@@ -3919,14 +3959,14 @@ function getLayoutSummaryTextClassName(lens: LensRecord): string {
 /** 获取 Layout 视频匹配依据的描述文本 */
 function getLayoutVideoMatchHint(hasSelectedLayout: boolean, hasMatchedVideo: boolean): string {
   if (!hasSelectedLayout) {
-    return '自动匹配会优先基于当前采用的Layout Maya 进行；多候选时默认选择版本号更大、命名更标准的视频。';
+    return '自动匹配会优先基于当前采用的Layout Maya 和镜头号进行；命中多个本地版本时默认选择版本号最高的视频。';
   }
 
   if (!hasMatchedVideo) {
-    return '当前仍未命中可用视频。自动匹配会优先基于当前采用的Layout Maya 进行；多候选时默认选择版本号更大、命名更标准的视频。';
+    return '当前仍未命中可用视频。自动匹配会优先基于当前采用的Layout Maya 和镜头号进行；命中多个本地版本时默认选择版本号最高的视频。';
   }
 
-  return '当前视频来自自动匹配结果：优先基于当前采用的Layout Maya；多候选时默认选择版本号更大、命名更标准的视频。';
+  return '当前视频来自本地自动匹配结果：优先基于当前采用的Layout Maya 和镜头号；命中多个本地版本时默认选择版本号最高的视频。';
 }
 
 /** 格式化匹配候选列表为可读字符串 */

@@ -12,6 +12,7 @@ import { apiClient } from '../../api/client';
 import { suppressAutoInitializedLensSync } from '../../services/repositoryService';
 import type { RemoteEpisodeResponse, RemoteLensResponse, RemoteProjectCreateResponse, RemoteProjectResponse, RemoteRootResponse } from './types';
 import { collectActivationTrace, collectEnabledRootPaths, describeRootCandidates, getLensLayoutRootConflictMessageFromPaths, resolveProjectActivationPaths, resolveWindowsDriveVariantPath } from '../../utils/projectActivationPaths';
+import { getActivationRootOverrides, saveActivationRootOverrides } from '../../utils/activationRootOverrides';
 
 interface RemoteProjectMemberResponse {
   userId: string;
@@ -92,6 +93,22 @@ function remapScanRootsToDrive(roots: ScanRootConfigItem[] | undefined, targetDr
   return mapped.length > 0 ? mapped : undefined;
 }
 
+async function filterExistingRoots(roots: ScanRootConfigItem[] | undefined): Promise<ScanRootConfigItem[] | undefined> {
+  if (!roots || roots.length === 0) {
+    return undefined;
+  }
+
+  const existing: ScanRootConfigItem[] = [];
+  for (const root of roots) {
+    const result = await pathExistsWithPermission(root.absolutePath);
+    if (result.exists) {
+      existing.push(root);
+    }
+  }
+
+  return existing.length > 0 ? existing : undefined;
+}
+
 function mapRemoteProjectToLocal(raw: RemoteProjectResponse): ProjectSummary {
   return {
     projectId: raw.code,
@@ -103,8 +120,6 @@ function mapRemoteProjectToLocal(raw: RemoteProjectResponse): ProjectSummary {
     versionTag: raw.versionTag,
     layoutTag: raw.layoutTag,
     lensFolderRootPath: raw.lensFolderRootPath ?? undefined,
-    maCheckPath: raw.maCheckPath ?? undefined,
-    movCheckPath: raw.movCheckPath ?? undefined,
     layoutCheckPath: raw.layoutCheckPath ?? undefined,
     lensRoots: mapRemoteRootsToLocal(raw.lensRoots, 'ma'),
     layoutRoots: mapRemoteRootsToLocal(raw.layoutRoots, 'layout'),
@@ -123,8 +138,16 @@ async function pathExists(pathValue: string): Promise<boolean> {
   return Boolean(result.success && result.exists);
 }
 
+async function pathExistsWithPermission(pathValue: string): Promise<{ exists: boolean; permissionDenied: boolean }> {
+  const result = await window.movtools.file.exists({ path: pathValue });
+  return {
+    exists: Boolean(result.success && result.exists),
+    permissionDenied: Boolean(result.permissionDenied),
+  };
+}
+
 function buildActivationPathError(
-  kind: '项目根目录' | '镜头根目录' | 'Layout 根目录',
+  kind: '项目根目录' | '镜头文件根目录' | 'Layout 根目录',
   resolution: { configuredPath?: string; missingServicePath: boolean; localMismatch: boolean },
   roots?: ScanRootConfigItem[] | undefined,
 ): string {
@@ -1022,8 +1045,14 @@ class RemoteProjectRepository implements IProjectRepository {
       const preferredEpisode = episodes.episodes.find((entry) => entry.episodeId === (episodes.activeEpisodeId ?? this.activeEpisodeId)) ?? episodes.episodes[0] ?? null;
       const activationPaths = await resolveProjectActivationPaths(project, preferredEpisode, pathExists);
       const resolvedProjectRootPath = activationPaths.projectRootPath;
-      const manualProjectRootPath = options?.projectRootPath?.trim() || undefined;
-      if (resolvedProjectRootPath.missingServicePath && !manualProjectRootPath) {
+
+      const savedOverrides = getActivationRootOverrides(projectCode);
+      const manualProjectRootPath = options?.projectRootPath?.trim() || savedOverrides?.projectRootPath?.trim() || undefined;
+      const manualLensRootPath = options?.lensFolderRootPath?.trim() || savedOverrides?.lensFolderRootPath?.trim() || undefined;
+      const manualLayoutRootPath = options?.layoutCheckPath?.trim() || savedOverrides?.layoutCheckPath?.trim() || undefined;
+      const hasManualOverride = Boolean(manualProjectRootPath || manualLensRootPath || manualLayoutRootPath);
+
+      if (resolvedProjectRootPath.missingServicePath && !hasManualOverride) {
         return {
           success: false,
           error: `${buildActivationPathError('项目根目录', resolvedProjectRootPath)}｜${collectActivationTrace(project, preferredEpisode)}`,
@@ -1031,36 +1060,36 @@ class RemoteProjectRepository implements IProjectRepository {
       }
 
       const resolvedLensFolderRootPath = activationPaths.lensFolderRootPath;
-      if (resolvedLensFolderRootPath.missingServicePath && !manualProjectRootPath) {
+      if (resolvedLensFolderRootPath.missingServicePath && !hasManualOverride) {
         return {
           success: false,
-          error: `${buildActivationPathError('镜头根目录', resolvedLensFolderRootPath, preferredEpisode?.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
+          error: `${buildActivationPathError('镜头文件根目录', resolvedLensFolderRootPath, preferredEpisode?.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
         };
       }
 
       const resolvedLayoutCheckPath = activationPaths.layoutCheckPath;
-      if (resolvedLayoutCheckPath.missingServicePath && !manualProjectRootPath) {
+      if (resolvedLayoutCheckPath.missingServicePath && !hasManualOverride) {
         return {
           success: false,
           error: `${buildActivationPathError('Layout 根目录', resolvedLayoutCheckPath, preferredEpisode?.layoutRoots ?? project.layoutRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
         };
       }
 
-      if (resolvedLensFolderRootPath.localMismatch && !manualProjectRootPath) {
+      if (resolvedLensFolderRootPath.localMismatch && !hasManualOverride) {
         return {
           success: false,
-          error: `${buildActivationPathError('镜头根目录', resolvedLensFolderRootPath, preferredEpisode?.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
+          error: `${buildActivationPathError('镜头文件根目录', resolvedLensFolderRootPath, preferredEpisode?.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
         };
       }
 
-      if (resolvedLayoutCheckPath.localMismatch && !manualProjectRootPath) {
+      if (resolvedLayoutCheckPath.localMismatch && !hasManualOverride) {
         return {
           success: false,
           error: `${buildActivationPathError('Layout 根目录', resolvedLayoutCheckPath, preferredEpisode?.layoutRoots ?? project.layoutRoots)}｜${collectActivationTrace(project, preferredEpisode)}`,
         };
       }
 
-      if (resolvedProjectRootPath.localMismatch && !manualProjectRootPath) {
+      if (resolvedProjectRootPath.localMismatch && !hasManualOverride) {
         return {
           success: false,
           error: `${buildActivationPathError('项目根目录', resolvedProjectRootPath)}｜${collectActivationTrace(project, preferredEpisode)}`,
@@ -1073,21 +1102,39 @@ class RemoteProjectRepository implements IProjectRepository {
         return { success: false, error: `本机项目根目录不是有效的 Windows 盘符路径：${resolvedProjectRoot}｜${collectActivationTrace(project, preferredEpisode)}` };
       }
 
-      const resolvedLensRoot = remapWindowsDriveLetter(resolvedLensFolderRootPath.resolvedPath ?? resolvedLensFolderRootPath.configuredPath ?? '', targetDriveLetter);
-      const resolvedLayoutRoot = remapWindowsDriveLetter(resolvedLayoutCheckPath.resolvedPath ?? resolvedLayoutCheckPath.configuredPath ?? '', targetDriveLetter);
+      const resolvedLensRoot = manualLensRootPath
+        ?? (resolvedLensFolderRootPath.resolvedPath ? remapWindowsDriveLetter(resolvedLensFolderRootPath.resolvedPath, targetDriveLetter) : null)
+        ?? remapWindowsDriveLetter(resolvedLensFolderRootPath.configuredPath ?? '', targetDriveLetter);
+      const resolvedLayoutRoot = manualLayoutRootPath
+        ?? (resolvedLayoutCheckPath.resolvedPath ? remapWindowsDriveLetter(resolvedLayoutCheckPath.resolvedPath, targetDriveLetter) : null)
+        ?? remapWindowsDriveLetter(resolvedLayoutCheckPath.configuredPath ?? '', targetDriveLetter);
       const remappedLensRoots = remapScanRootsToDrive(preferredEpisode?.lensRoots ?? project.lensRoots, targetDriveLetter);
       const remappedLayoutRoots = remapScanRootsToDrive(preferredEpisode?.layoutRoots ?? project.layoutRoots, targetDriveLetter);
+      const filteredLensRoots = await filterExistingRoots(remappedLensRoots);
+      const filteredLayoutRoots = await filterExistingRoots(remappedLayoutRoots);
 
-      if (!(await pathExists(resolvedProjectRoot))) {
+      const projectRootCheck = await pathExistsWithPermission(resolvedProjectRoot);
+      if (!projectRootCheck.exists) {
         return { success: false, error: `本机找不到项目根目录：${resolvedProjectRoot}｜${collectActivationTrace(project, preferredEpisode)}` };
       }
-
-      if (!resolvedLensRoot || !(await pathExists(resolvedLensRoot))) {
-        return { success: false, error: `本机找不到镜头根目录：${resolvedLensRoot || '未配置'}｜${collectActivationTrace(project, preferredEpisode)}` };
+      if (projectRootCheck.permissionDenied) {
+        return { success: false, error: `项目根目录权限不足：${resolvedProjectRoot}｜请手动指定有权限的项目根目录路径，或联系项目管理员授权该目录。｜${collectActivationTrace(project, preferredEpisode)}` };
       }
 
-      if (!resolvedLayoutRoot || !(await pathExists(resolvedLayoutRoot))) {
-        return { success: false, error: `本机找不到 Layout 根目录：${resolvedLayoutRoot || '未配置'}｜${collectActivationTrace(project, preferredEpisode)}` };
+      const lensRootCheck = await pathExistsWithPermission(resolvedLensRoot ?? '');
+      if (!resolvedLensRoot || !lensRootCheck.exists) {
+        return { success: false, error: `本机找不到镜头文件根目录：${resolvedLensRoot || '未配置'}｜请手动指定镜头文件根目录路径，或确认目标路径是否存在。｜${collectActivationTrace(project, preferredEpisode)}` };
+      }
+      if (lensRootCheck.permissionDenied) {
+        return { success: false, error: `镜头文件根目录权限不足：${resolvedLensRoot}｜请手动指定有权限的镜头文件根目录路径，或联系项目管理员授权该目录。｜${collectActivationTrace(project, preferredEpisode)}` };
+      }
+
+      const layoutRootCheck = await pathExistsWithPermission(resolvedLayoutRoot ?? '');
+      if (!resolvedLayoutRoot || !layoutRootCheck.exists) {
+        return { success: false, error: `本机找不到 Layout 根目录：${resolvedLayoutRoot || '未配置'}｜请手动指定 Layout 根目录路径，或确认目标路径是否存在。｜${collectActivationTrace(project, preferredEpisode)}` };
+      }
+      if (layoutRootCheck.permissionDenied) {
+        return { success: false, error: `Layout 根目录权限不足：${resolvedLayoutRoot}｜请手动指定有权限的 Layout 根目录路径，或联系项目管理员授权该目录。｜${collectActivationTrace(project, preferredEpisode)}` };
       }
 
       let localProjectId: string | null = null;
@@ -1141,8 +1188,8 @@ class RemoteProjectRepository implements IProjectRepository {
             versionTag: nextEpisode.versionTag ?? project.versionTag ?? inferredTags.versionTag,
             layoutTag: nextEpisode.layoutTag ?? project.layoutTag ?? inferredTags.layoutTag,
             pendingClientActions: ['refresh_local_episode_workspace'],
-            lensRoots: remappedLensRoots,
-            layoutRoots: remappedLayoutRoots,
+            lensRoots: filteredLensRoots,
+            layoutRoots: filteredLayoutRoots,
             lensSyncItems: sanitizedLensSyncItems,
           });
           if (!initResponse.success) {
@@ -1156,6 +1203,15 @@ class RemoteProjectRepository implements IProjectRepository {
           suppressAutoInitializedLensSync();
         }
       }
+
+      if (options?.projectRootPath || options?.lensFolderRootPath || options?.layoutCheckPath) {
+        saveActivationRootOverrides(projectCode, {
+          projectRootPath: options.projectRootPath,
+          lensFolderRootPath: options.lensFolderRootPath,
+          layoutCheckPath: options.layoutCheckPath,
+        });
+      }
+
       const refreshedWorkspace = await this.getWorkspace();
       refreshedWorkspace.activeEpisodeId = this.activeEpisodeId;
       return {
@@ -1332,14 +1388,14 @@ class RemoteProjectRepository implements IProjectRepository {
             if (resolvedLensFolderRootPath.missingServicePath) {
               return {
                 success: false,
-                error: `${buildActivationPathError('镜头根目录', resolvedLensFolderRootPath, episode.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, episode)}`,
+                error: `${buildActivationPathError('镜头文件根目录', resolvedLensFolderRootPath, episode.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, episode)}`,
               };
             }
 
             if (resolvedLensFolderRootPath.localMismatch) {
               return {
                 success: false,
-                error: `${buildActivationPathError('镜头根目录', resolvedLensFolderRootPath, episode.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, episode)}`,
+                error: `${buildActivationPathError('镜头文件根目录', resolvedLensFolderRootPath, episode.lensRoots ?? project.lensRoots)}｜${collectActivationTrace(project, episode)}`,
               };
             }
 

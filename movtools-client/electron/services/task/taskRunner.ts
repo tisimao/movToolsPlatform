@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { MediaTask } from '../../../src/types/task';
 import { buildCommandArguments } from '../ffmpeg/commandBuilder';
-import { probeVideoMetadata } from '../ffmpeg/ffprobeService';
+import { probeDuration, probeVideoMetadata } from '../ffmpeg/ffprobeService';
 
 export interface TaskRunnerResult {
   commandExecutable: string;
@@ -26,14 +26,25 @@ export class TaskRunner {
           const metadata = await probeVideoMetadata(ffprobePath, inputPath);
           return {
             path: inputPath,
+            durationSeconds: metadata.durationSeconds,
             width: metadata.width ?? undefined,
             height: metadata.height ?? undefined,
+            hasAudio: metadata.hasAudio,
             overlayText: mergeOverlayTexts?.[index]?.trim() || undefined,
             fileNameText: path.basename(inputPath),
           };
         } catch {
+          let durationSeconds: number | undefined;
+          try {
+            durationSeconds = await probeDuration(ffprobePath, inputPath);
+          } catch {
+            durationSeconds = undefined;
+          }
+
           return {
             path: inputPath,
+            durationSeconds,
+            hasAudio: false,
             overlayText: mergeOverlayTexts?.[index]?.trim() || undefined,
             fileNameText: path.basename(inputPath),
           };

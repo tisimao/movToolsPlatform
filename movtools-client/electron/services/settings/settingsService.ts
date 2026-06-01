@@ -15,6 +15,7 @@ const defaultSettings: AppSettings = {
   defaultOutputDir: '',
   autoOpenOutputDir: false,
   logRetentionDays: 7,
+  renameDuringExtract: false,
 };
 
 class SettingsService {

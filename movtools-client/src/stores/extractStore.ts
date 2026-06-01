@@ -14,6 +14,8 @@ interface ExtractState {
   previewId: string | null;
   /** 当前预览文件列表 */
   previewItems: ExtractPreviewItem[];
+  /** 从当前预览中移除单项 */
+  removePreviewItem: (itemId: string) => void;
   /** 设置历史记录 */
   setHistory: (history: ExtractRecordItem[]) => void;
   /** 设置预览（会话ID和文件列表） */
@@ -28,6 +30,10 @@ export const useExtractStore = create<ExtractState>((set) => ({
   previewId: null,
   /** 初始预览文件列表为空数组 */
   previewItems: [],
+  /** 从当前预览中移除单项 */
+  removePreviewItem: (itemId) => set((state) => ({
+    previewItems: state.previewItems.filter((item) => item.itemId !== itemId),
+  })),
   /** 设置历史记录的更新函数 */
   setHistory: (history) => set({ history }),
   /** 设置预览的更新函数 */

@@ -43,8 +43,6 @@ export interface ProjectSummary {
   versionTag?: string;        // 项目统一版本字段
   layoutTag?: string;         // 项目统一 Layout 字段
   lensFolderRootPath?: string; // 镜头文件根目录
-  maCheckPath?: string;      // ma 文件检查路径
-  movCheckPath?: string;     // mov 文件检查路径
   layoutCheckPath?: string;   // layout 检查路径
   lensRoots?: ScanRootConfigItem[];
   layoutRoots?: ScanRootConfigItem[];

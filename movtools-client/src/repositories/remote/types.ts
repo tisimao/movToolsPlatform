@@ -21,8 +21,6 @@ export interface RemoteProjectResponse {
   lensRoots?: RemoteRootResponse[];
   layoutRoots?: RemoteRootResponse[];
   lensFolderRootPath?: string | null;
-  maCheckPath?: string | null;
-  movCheckPath?: string | null;
   layoutCheckPath?: string | null;
   isArchived: boolean;
   rowVersion: number;

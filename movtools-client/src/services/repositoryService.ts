@@ -175,6 +175,8 @@ export const projectService = {
 
   async setActiveProject(projectId: string, options?: {
     projectRootPath?: string;
+    lensFolderRootPath?: string;
+    layoutCheckPath?: string;
   }) {
     return getProjectRepository().setActiveProject(projectId, options);
   },

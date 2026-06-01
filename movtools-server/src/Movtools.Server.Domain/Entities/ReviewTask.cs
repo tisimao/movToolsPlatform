@@ -88,7 +88,7 @@ public sealed class ReviewTask : EntityBase
     /// <summary>
     /// 创建人用户ID
     /// </summary>
-    public Guid CreatedByUserId { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
     /// 创建人用户实体

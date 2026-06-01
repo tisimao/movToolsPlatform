@@ -5,4 +5,5 @@ export interface AppSettings {
   defaultOutputDir: string;
   autoOpenOutputDir: boolean;
   logRetentionDays: number;
+  renameDuringExtract: boolean;
 }

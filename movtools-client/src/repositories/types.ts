@@ -52,6 +52,8 @@ export interface IProjectRepository {
   /** 设为当前项目 */
   setActiveProject(projectId: string, options?: {
     projectRootPath?: string;
+    lensFolderRootPath?: string;
+    layoutCheckPath?: string;
   }): Promise<{ success: boolean; project?: ProjectSummary; workspace?: ProjectWorkspace; error?: string }>;
   
   /** 创建集 */

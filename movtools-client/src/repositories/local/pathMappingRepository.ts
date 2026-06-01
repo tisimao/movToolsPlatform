@@ -29,14 +29,14 @@ const DEFAULT_STORAGE_ROOTS: StorageRoot[] = [
     rootId: 'local-default',
     rootCode: 'lens-root-main',
     rootLabel: '镜头主目录',
-    description: '默认镜头文件根目录',
+    description: '镜头文件根目录',
     createdAt: new Date().toISOString(),
   },
   {
     rootId: 'local-layout',
     rootCode: 'layout-root-main',
     rootLabel: 'Layout 目录',
-    description: '默认 Layout 文件根目录',
+    description: 'Layout 文件根目录',
     createdAt: new Date().toISOString(),
   },
 ];

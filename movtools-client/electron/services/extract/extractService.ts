@@ -5,6 +5,7 @@ import path from 'node:path';
 import { shell } from 'electron';
 import { ensureDirectoryExists, ensureFileExists } from '../file/fileService';
 import { projectService } from '../project/projectService';
+import { settingsService } from '../settings/settingsService';
 import { loadXlsx } from '../../shared/xlsx';
 import type {
   ExecuteExtractRequest,
@@ -65,6 +66,9 @@ class ExtractService {
       return { success: false, items: [], error: '请先在项目页创建或打开一个项目。' };
     }
 
+    const settings = await settingsService.getSettings();
+    const shouldRename = request.renameFiles ?? settings.renameDuringExtract;
+
     return this.withDatabase(activeProject.databasePath, (database) => {
       const lenses = database.prepare(`
         SELECT episode_id, lens_code, maker, lens_status, version_num, file_name
@@ -105,7 +109,6 @@ class ExtractService {
             continue;
           }
 
-          const extension = binding.file_type === 'ma' ? '.ma' : path.extname(binding.file_relative_path) || '.mov';
           items.push({
             itemId: binding.file_id,
             lensCode: lens.lens_code,
@@ -115,7 +118,10 @@ class ExtractService {
             fileName: lens.file_name ?? '',
             fileType: binding.file_type,
             sourcePath: path.resolve(activeProject.projectRootPath, binding.file_relative_path),
-            targetFileName: `${(lens.file_name ?? `${lens.lens_code}_ani_${versionNum.toLowerCase()}`).trim()}${extension}`,
+            sourceFileName: path.basename(binding.file_relative_path),
+            targetFileName: shouldRename
+              ? buildRenamedFileName(lens.file_name, lens.lens_code, versionNum, binding.file_type, binding.file_relative_path)
+              : path.basename(binding.file_relative_path),
           });
         }
       }
@@ -140,15 +146,19 @@ class ExtractService {
       return { success: false, error: '待提取列表已失效，请重新生成并确认列表。' };
     }
 
-    if (preview.items.length === 0) {
+    const itemsToExtract = request.selectedItemIds
+      ? preview.items.filter((item) => request.selectedItemIds!.includes(item.itemId))
+      : preview.items;
+
+    if (itemsToExtract.length === 0) {
       return { success: false, error: '当前提取列表为空。' };
     }
 
     reportProgress?.({
       phase: 'started',
       message: '开始执行提取。',
-      total: preview.items.length,
-      logLine: `开始提取，共 ${preview.items.length} 个文件。`,
+      total: itemsToExtract.length,
+      logLine: `开始提取，共 ${itemsToExtract.length} 个文件。`,
     });
 
     const result = await this.withDatabase(activeProject.databasePath, async (database) => {
@@ -156,7 +166,7 @@ class ExtractService {
       reportProgress?.({
         phase: 'preparing',
         message: `检查目标目录：${request.targetPath}`,
-        total: preview.items.length,
+        total: itemsToExtract.length,
         logLine: `准备目标目录：${request.targetPath}`,
       });
       await ensureDirectoryExists(request.targetPath);
@@ -165,12 +175,12 @@ class ExtractService {
       let movCount = 0;
       const logs: ExtractExecutionLogItem[] = [];
 
-      for (const item of preview.items) {
+      for (const item of itemsToExtract) {
         reportProgress?.({
           phase: 'copying',
           message: `正在处理 ${item.lensCode} / ${item.fileType}`,
           current: logs.length + 1,
-          total: preview.items.length,
+          total: itemsToExtract.length,
           lensCode: item.lensCode,
           fileType: item.fileType,
           logLine: `开始处理 ${item.lensCode} / ${item.fileType}：${item.sourcePath}`,
@@ -199,7 +209,7 @@ class ExtractService {
             phase: 'copying',
             message: `${item.lensCode} / ${item.fileType} 提取成功。`,
             current: logs.length,
-            total: preview.items.length,
+            total: itemsToExtract.length,
             lensCode: item.lensCode,
             fileType: item.fileType,
             success: true,
@@ -220,7 +230,7 @@ class ExtractService {
             phase: 'failed',
             message: `${item.lensCode} / ${item.fileType} 提取失败。`,
             current: logs.length,
-            total: preview.items.length,
+            total: itemsToExtract.length,
             lensCode: item.lensCode,
             fileType: item.fileType,
             success: false,
@@ -246,29 +256,29 @@ class ExtractService {
       writeExtractRecord(database, {
         recordId: createCompactId(),
         extractTime: now,
-        fileTotal: preview.items.length,
+        fileTotal: itemsToExtract.length,
         maFileNum: maCount,
         movFileNum: movCount,
         targetPath: request.targetPath,
         isSuccess: failedCount === 0 ? '是' : '否',
         failReason,
       });
-      writeOperateLog(database, '文件提取', null, `提取文件总数：${preview.items.length}，成功：${successCount}，失败：${failedCount}，目标路径：${request.targetPath}`, now);
+      writeOperateLog(database, '文件提取', null, `提取文件总数：${itemsToExtract.length}，成功：${successCount}，失败：${failedCount}，目标路径：${request.targetPath}`, now);
       this.previewSessions.delete(request.previewId);
 
       reportProgress?.({
         phase: failedCount === 0 ? 'completed' : 'failed',
         message: failedCount === 0 ? '提取完成。' : '提取完成，但有失败项。',
         current: logs.length,
-        total: preview.items.length,
+        total: itemsToExtract.length,
         success: failedCount === 0,
-        logLine: `提取结束：总数 ${preview.items.length}，成功 ${successCount}，失败 ${failedCount}，清单：${manifestPath}`,
+        logLine: `提取结束：总数 ${itemsToExtract.length}，成功 ${successCount}，失败 ${failedCount}，清单：${manifestPath}`,
       });
 
       return {
         success: failedCount === 0,
         error: failedCount > 0 ? `部分文件提取失败：成功 ${successCount} 个，失败 ${failedCount} 个。` : undefined,
-        fileTotal: preview.items.length,
+        fileTotal: itemsToExtract.length,
         successCount,
         failedCount,
         maFileNum: maCount,
@@ -416,6 +426,11 @@ function buildLensDisplayName(item: ExtractExecutionLogItem, previewItems: Extra
   }
 
   return baseName.includes(versionNum) ? baseName : `${baseName}_${versionNum}`;
+}
+
+function buildRenamedFileName(fileName: string | null, lensCode: string, versionNum: string, fileType: 'ma' | 'mov', relativePath: string): string {
+  const extension = fileType === 'ma' ? '.ma' : path.extname(relativePath) || '.mov';
+  return `${(fileName ?? `${lensCode}_ani_${versionNum.toLowerCase()}`).trim()}${extension}`;
 }
 
 function formatFileTimestamp(date: Date): string {

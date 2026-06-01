@@ -28,7 +28,7 @@ import type { LayoutReferenceCheckRecord, LayoutReferenceCheckStatus, LayoutRefe
 import { probeVideoMetadata } from '../ffmpeg/ffprobeService';
 import { resolveVideoPreviewSource } from '../ffmpeg/videoPreviewService';
 import { projectService } from '../project/projectService';
-import { getEnabledScanRootPaths, migrateLegacyScanRoots, readConfiguredScanRoots } from '../project/scanRootService';
+import { getEnabledScanRootPaths, readConfiguredScanRoots } from '../project/scanRootService';
 import { settingsService } from '../settings/settingsService';
 import { assertLensFolderIsEmptyOrMissing, deleteEmptyLensFolder, ensureLensFolder, ensureLensRootDirectory, removeCreatedLensFolders, resolveLensFolderName, resolveLensFolderRootPath, validateLensFolderName } from './lensFolderService';
 import { parseLensImportRow, type ParsedLensImportRow, type ParsedLensImportRowError } from './lensImport';
@@ -230,15 +230,6 @@ class LensService {
     });
 
     const listData = this.withDatabase(activeProject.project.databasePath, (database) => {
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeProject.project.projectId,
-        episodeId: activeProject.episode.episodeId,
-      }, {
-        maCheckPath: activeProject.project.maCheckPath,
-        movCheckPath: activeProject.project.movCheckPath,
-        layoutCheckPath: activeProject.episode.layoutCheckPath,
-      }, now);
       const scanRoots = readConfiguredScanRoots(database, {
         projectId: activeProject.project.projectId,
         episodeId: activeProject.episode.episodeId,
@@ -297,15 +288,6 @@ class LensService {
     });
 
     const detailData = this.withDatabase(activeProject.project.databasePath, (database) => {
-      const now = formatDateTime(new Date());
-      migrateLegacyScanRoots(database, {
-        projectId: activeProject.project.projectId,
-        episodeId: activeProject.episode.episodeId,
-      }, {
-        maCheckPath: activeProject.project.maCheckPath,
-        movCheckPath: activeProject.project.movCheckPath,
-        layoutCheckPath: activeProject.episode.layoutCheckPath,
-      }, now);
       const scanRoots = readConfiguredScanRoots(database, {
         projectId: activeProject.project.projectId,
         episodeId: activeProject.episode.episodeId,
@@ -1630,6 +1612,7 @@ function enrichLensRecord(
   recentStatusSummary: RecentStatusSummary = emptyRecentStatusSummary(),
 ): LensRecord {
   const issues = buildVersionIssues(lens, bindings);
+  const fileReadinessIssues = issues.filter((issue) => issue.reason !== '帧数不匹配');
   const layoutSummary = buildLayoutSummary(layoutCandidates, layoutVideoSummary.selectedLayoutCandidateId);
   const currentVersionMatchedFileNames = bindings
     .filter((binding) => binding.versionNum === (normalizeVersion(lens.versionNum) || DEFAULT_VERSION_NUM))
@@ -1644,7 +1627,7 @@ function enrichLensRecord(
     ...lens,
     singleFrame: effectiveSingleFrame,
     currentVersionIssues: issues,
-    currentVersionReady: issues.length === 0,
+    currentVersionReady: fileReadinessIssues.length === 0,
     currentVersionMatchedFileNames,
     layoutCandidateCount: layoutSummary.layoutCandidateCount,
     selectedLayoutFileName: layoutSummary.selectedLayoutFileName,
@@ -1742,7 +1725,7 @@ function buildLayoutVideoSummary(
   const selectedLayout = resolveSelectedLayoutCandidate(layoutCandidates, videoFiles, lensCode);
   const manualBinding = selectedLayout
     ? layoutVideoBindings.find((binding) => binding.candidateId === selectedLayout.candidateId && binding.exists)
-    : undefined;
+    : layoutVideoBindings.find((binding) => !binding.candidateId && binding.exists);
   if (manualBinding) {
     return {
       selectedLayoutCandidateId: selectedLayout?.candidateId,
@@ -1801,7 +1784,8 @@ function scoreLayoutVideoFileMatch(
 
   const baseNameWithoutVersion = normalizedVideoStem;
   const fileVersion = extractVersionNumber(baseName);
-  if (!hasLayoutVideoKeyword(baseNameWithoutVersion)) {
+  const exactLensStemMatch = baseNameWithoutVersion === normalizedLensCode;
+  if (!hasLayoutVideoKeyword(baseNameWithoutVersion) && !exactLensStemMatch) {
     return 0;
   }
 
@@ -1810,7 +1794,7 @@ function scoreLayoutVideoFileMatch(
     score += 400;
   } else if (baseNameWithoutVersion.startsWith(`${normalizedLensCode}_`)) {
     score += 320;
-  } else if (baseNameWithoutVersion === normalizedLensCode) {
+  } else if (exactLensStemMatch) {
     score += 240;
   }
   score += scoreLayoutVideoLensStemAffinity(baseNameWithoutVersion, normalizedLensCode);
@@ -1978,19 +1962,6 @@ function resolveSelectedLayoutCandidate(
     return layoutCandidates[0];
   }
 
-  if (videoFiles.length > 0 && lensCode.trim()) {
-    const rankedCandidates = layoutCandidates
-      .map((candidate) => ({
-        candidate,
-        matchedVideo: matchLayoutVideoFileByLensCode(lensCode, videoFiles, candidate.fileName),
-      }))
-      .filter((item) => item.matchedVideo);
-
-    if (rankedCandidates.length === 1) {
-      return rankedCandidates[0].candidate;
-    }
-  }
-
   return layoutCandidates[0];
 }
 
@@ -2031,7 +2002,7 @@ function buildVersionIssues(lens: Pick<LensRecord, 'versionNum' | 'singleFrame'>
   }
 
   const movBinding = currentBindings.find((binding) => binding.fileType === 'mov' && binding.exists);
-  if (movBinding?.mediaFrameCount && movBinding.mediaFrameCount !== lens.singleFrame) {
+  if (lens.singleFrame > 0 && movBinding?.mediaFrameCount && movBinding.mediaFrameCount !== lens.singleFrame) {
     issues.push({
       fileType: 'mov',
       reason: '帧数不匹配',
@@ -2681,13 +2652,13 @@ function readLayoutVideoBindingsByCode(database: DatabaseSync, episodeId: string
     ORDER BY bind_time DESC, file_name ASC
   `).all(episodeId) as unknown as RawLayoutVideoBindingRow[];
 
-  return rows.reduce<Map<string, LensLayoutVideoBinding[]>>((accumulator, row) => {
-    const absolutePath = resolveStoredPath(projectRootPath, row.file_relative_path);
-    const mapped: LensLayoutVideoBinding = {
-      bindingId: row.binding_id,
-      candidateId: row.candidate_id,
-      lensCode: row.lens_code,
-      fileName: row.file_name,
+    return rows.reduce<Map<string, LensLayoutVideoBinding[]>>((accumulator, row) => {
+      const absolutePath = resolveStoredPath(projectRootPath, row.file_relative_path);
+      const mapped: LensLayoutVideoBinding = {
+        bindingId: row.binding_id,
+        candidateId: row.candidate_id || undefined,
+        lensCode: row.lens_code,
+        fileName: row.file_name,
       relativePath: row.file_relative_path,
       absolutePath,
       bindTime: row.bind_time,

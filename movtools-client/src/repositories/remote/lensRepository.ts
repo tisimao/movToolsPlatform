@@ -439,6 +439,31 @@ function resolveLayoutVideoBinding(
   return layoutVideoBindings.find((binding) => binding.candidateId === selectedLayoutCandidate.candidateId) ?? null;
 }
 
+function buildRemotePreferredLayoutVideoState(
+  detail: ServerLensDetailResponse,
+  selectedLayoutVideoBinding: LensLayoutVideoBinding | null,
+): Pick<LensRecord, 'layoutVideoReady' | 'layoutVideoFileName' | 'layoutVideoRelativePath' | 'layoutVideoAbsolutePath' | 'layoutVideoVersionNum'> {
+  if (selectedLayoutVideoBinding?.exists) {
+    return {
+      layoutVideoReady: true,
+      layoutVideoFileName: selectedLayoutVideoBinding.fileName,
+      layoutVideoRelativePath: selectedLayoutVideoBinding.relativePath,
+      layoutVideoAbsolutePath: selectedLayoutVideoBinding.absolutePath,
+      layoutVideoVersionNum: normalizeVersionKey(selectedLayoutVideoBinding.fileName),
+    };
+  }
+
+  return {
+    layoutVideoReady: detail.currentLayout?.videoReady ?? false,
+    layoutVideoFileName: detail.currentLayout?.videoFileName ?? '',
+    layoutVideoRelativePath: detail.currentLayout?.videoRelativePath ?? '',
+    layoutVideoAbsolutePath: '',
+    layoutVideoVersionNum: detail.currentLayout?.videoFileName
+      ? normalizeVersionKey(detail.currentLayout.videoFileName)
+      : '',
+  };
+}
+
 function mapServerLayoutReferenceCheck(detail: ServerLensDetailResponse, lensId: string): LayoutReferenceCheckRecord | undefined {
   if (!detail.layoutReferenceCheck) {
     return undefined;
@@ -589,18 +614,6 @@ function mergeRemoteLensWithLocal(remoteLens: LensRecord, localLens: LensRecord)
     recentStatusActionLabel: localLens.recentStatusActionLabel || remoteLens.recentStatusActionLabel,
     recentStatusActionTime: localLens.recentStatusActionTime || remoteLens.recentStatusActionTime,
   };
-}
-
-async function tryRefreshLocalLensBindings(lensIds: string[]): Promise<void> {
-  if (lensIds.length === 0) {
-    return;
-  }
-
-  try {
-    await window.movtools.fileCheck.refreshLensBindings({ lensIds });
-  } catch {
-    // local scan is best-effort on list entry
-  }
 }
 
 async function readLocalLensList(): Promise<LensListResponse | null> {
@@ -831,7 +844,6 @@ class RemoteLensRepository implements ILensRepository {
     try {
       const response = await apiClient.get<RemoteLensResponse[]>(`/api/episodes/${episodeId}/lenses`);
       const remoteLenses = response.map(mapRemoteLensToLocal);
-      await tryRefreshLocalLensBindings(remoteLenses.map((lens) => lens.lensId));
 
       const localResponse = await readLocalLensList();
       const localLensMap = new Map((localResponse?.lenses ?? []).map((lens) => [lens.lensId, lens]));
@@ -860,7 +872,6 @@ class RemoteLensRepository implements ILensRepository {
   async getLensDetail(lensId: string): Promise<{ success: boolean; detail?: LensDetailPayload; error?: string }> {
     try {
       const detail = await fetchRemoteLensDetail(lensId);
-      await tryRefreshLocalLensBindings([lensId]);
       const localState = await readLocalFileCheckState();
       const localLensResponse = await readLocalLensList();
       const localLens = localLensResponse?.lenses.find((lens) => lens.lensId === lensId);
@@ -888,6 +899,7 @@ class RemoteLensRepository implements ILensRepository {
           || binding.relativePath === detail.currentLayout?.videoRelativePath,
         ) ?? null
         : resolveLayoutVideoBinding(selectedLayoutCandidate, localLayoutVideoBindings);
+      const resolvedLayoutVideo = buildRemotePreferredLayoutVideoState(detail, selectedLayoutVideoBinding);
       const layoutReferenceCheck = localLayoutReferenceCheck ?? mapServerLayoutReferenceCheck(detail, lensId);
       const repairAttachments = await fetchRemoteRepairAttachments(lensId);
       const directorFeedbacks = await fetchRemoteLensFeedbacks(lensId);
@@ -917,15 +929,11 @@ class RemoteLensRepository implements ILensRepository {
         selectedLayoutFileName: detail.currentLayout?.fileName ?? selectedLayoutCandidate?.fileName ?? '',
         selectedLayoutRelativePath: detail.currentLayout?.relativePath ?? selectedLayoutCandidate?.relativePath ?? '',
         layoutReady: Boolean(selectedLayoutCandidate ?? detail.currentLayout),
-        layoutVideoReady: detail.currentLayout?.videoReady ?? selectedLayoutVideoBinding?.exists ?? false,
-        layoutVideoFileName: detail.currentLayout?.videoFileName ?? selectedLayoutVideoBinding?.fileName ?? '',
-        layoutVideoRelativePath: detail.currentLayout?.videoRelativePath ?? selectedLayoutVideoBinding?.relativePath ?? '',
-        layoutVideoAbsolutePath: selectedLayoutVideoBinding?.exists ? selectedLayoutVideoBinding.absolutePath : '',
-        layoutVideoVersionNum: detail.currentLayout?.videoFileName
-          ? normalizeVersionKey(detail.currentLayout.videoFileName)
-          : selectedLayoutVideoBinding?.fileName
-            ? normalizeVersionKey(selectedLayoutVideoBinding.fileName)
-            : '',
+        layoutVideoReady: resolvedLayoutVideo.layoutVideoReady,
+        layoutVideoFileName: resolvedLayoutVideo.layoutVideoFileName,
+        layoutVideoRelativePath: resolvedLayoutVideo.layoutVideoRelativePath,
+        layoutVideoAbsolutePath: resolvedLayoutVideo.layoutVideoAbsolutePath,
+        layoutVideoVersionNum: resolvedLayoutVideo.layoutVideoVersionNum,
         layoutReferenceStatus: layoutReferenceCheck?.status ?? '未检查',
         layoutReferenceIssueCount: layoutReferenceCheck?.issueCount ?? 0,
         layoutReferenceLastCheckTime: layoutReferenceCheck?.lastCheckTime,

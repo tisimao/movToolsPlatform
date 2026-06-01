@@ -34,6 +34,37 @@ function toStringArray(value: unknown): string[] {
   return value.map((item) => toStringValue(item)).filter((item) => item.length > 0);
 }
 
+function normalizeRoleName(role: string): string {
+  const trimmed = role.trim();
+  const normalized = trimmed.toLowerCase();
+
+  switch (normalized) {
+    case 'systemadmin':
+    case 'system-admin':
+    case '系统管理员':
+      return 'system-admin';
+    case 'administrator':
+    case 'admin':
+      return 'admin';
+    case 'producer':
+    case '制片':
+      return 'producer';
+    case 'director':
+    case '导演':
+      return 'director';
+    case 'maker':
+    case '制作人员':
+    case '制作':
+      return 'maker';
+    case 'viewer':
+    case 'readonly':
+    case '只读查看者':
+      return 'viewer';
+    default:
+      return normalized;
+  }
+}
+
 /**
  * 标准化用户数据
  * @param raw 原始用户数据
@@ -51,7 +82,7 @@ function normalizeUser(raw: unknown): AuthUser {
 
   const record = raw as Record<string, unknown>;
   const roles = toStringArray(record.roles ?? record.roleNames ?? record.permissions ?? record.role)
-    .map((role) => role.toLowerCase());
+    .map(normalizeRoleName);
   const username = toStringValue(record.username ?? record.account ?? record.loginName ?? record.name, 'unknown');
   const displayName = toStringValue(record.displayName ?? record.realName ?? record.nickName ?? record.fullName, username);
 

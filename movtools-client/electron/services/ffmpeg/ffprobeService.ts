@@ -41,14 +41,19 @@ export interface ProbedVideoMetadata {
   codecLongName: string | null;
   codecProfile: string | null;
   pixelFormat: string | null;
+  hasAudio: boolean;
+  audioCodecName: string | null;
+  audioChannels: number | null;
+  audioChannelLayout: string | null;
+  audioSampleRate: number | null;
 }
 
 export async function probeVideoMetadata(executable: string, inputPath: string): Promise<ProbedVideoMetadata> {
   return new Promise<ProbedVideoMetadata>((resolve, reject) => {
     const child = spawn(executable, [
       '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=avg_frame_rate,r_frame_rate,nb_frames,duration,width,height,codec_name,codec_long_name,profile,pix_fmt:format=duration,format_name',
+      '-show_streams',
+      '-show_entries', 'stream=index,codec_type,avg_frame_rate,r_frame_rate,nb_frames,duration,width,height,codec_name,codec_long_name,profile,pix_fmt,channels,channel_layout,sample_rate:format=duration,format_name',
       '-of', 'json',
       inputPath,
     ], {
@@ -76,6 +81,8 @@ export async function probeVideoMetadata(executable: string, inputPath: string):
       try {
         const parsed = JSON.parse(output) as {
           streams?: Array<{
+            index?: number;
+            codec_type?: string;
             avg_frame_rate?: string;
             r_frame_rate?: string;
             nb_frames?: string;
@@ -86,10 +93,15 @@ export async function probeVideoMetadata(executable: string, inputPath: string):
             codec_long_name?: string;
             profile?: string;
             pix_fmt?: string;
+            channels?: number;
+            channel_layout?: string;
+            sample_rate?: string;
           }>;
           format?: { duration?: string; format_name?: string };
         };
-        const stream = parsed.streams?.[0];
+        const videoStream = parsed.streams?.find((stream) => stream.codec_type === 'video');
+        const audioStream = parsed.streams?.find((stream) => stream.codec_type === 'audio');
+        const stream = videoStream ?? parsed.streams?.[0];
         const fps = parseRate(stream?.avg_frame_rate) ?? parseRate(stream?.r_frame_rate);
         const durationSeconds = parseNumber(stream?.duration) ?? parseNumber(parsed.format?.duration) ?? 0;
         const parsedFrameCount = parseInteger(stream?.nb_frames);
@@ -105,6 +117,11 @@ export async function probeVideoMetadata(executable: string, inputPath: string):
           codecLongName: parseText(stream?.codec_long_name),
           codecProfile: parseText(stream?.profile),
           pixelFormat: parseText(stream?.pix_fmt),
+          hasAudio: Boolean(audioStream),
+          audioCodecName: parseText(audioStream?.codec_name),
+          audioChannels: parseNullableNumber(audioStream?.channels),
+          audioChannelLayout: parseText(audioStream?.channel_layout),
+          audioSampleRate: parseInteger(audioStream?.sample_rate),
         });
       } catch (error) {
         reject(error instanceof Error ? error : new Error('解析 FFprobe 视频信息失败。'));

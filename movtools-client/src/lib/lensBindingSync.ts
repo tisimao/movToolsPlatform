@@ -133,14 +133,11 @@ export async function refreshAndSyncLensBindings(options: LensBindingSyncOptions
     return { success: true };
   }
 
-  const refreshResponse = await window.movtools.fileCheck.refreshLensBindings({ lensIds: uniqueLensIds });
+  const refreshResponse = uniqueLensIds.length === 1
+    ? await window.movtools.fileCheck.scanLens({ lensId: uniqueLensIds[0] })
+    : await window.movtools.fileCheck.scan();
   if (!refreshResponse.success) {
     return { success: false, error: refreshResponse.error ?? '自动文件匹配失败。' };
-  }
-
-  const layoutRefreshResponse = await window.movtools.fileCheck.scanLayout();
-  if (!layoutRefreshResponse.success) {
-    return { success: false, error: layoutRefreshResponse.error ?? 'Layout 文件匹配失败。' };
   }
 
   if (getDataSource() !== 'remote') {

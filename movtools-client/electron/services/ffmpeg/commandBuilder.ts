@@ -18,6 +18,8 @@ interface CommandBuilderContext {
     path: string;
     width?: number;
     height?: number;
+    durationSeconds?: number;
+    hasAudio?: boolean;
     overlayText?: string;
     fileNameText?: string;
   }>;
@@ -65,17 +67,36 @@ function buildMergeVideoArguments(payload: Extract<TaskPayload, { type: 'merge-v
   const overlayStyle = payload.config.overlayStyle ?? DEFAULT_OVERLAY_STYLE;
   const filterSegments = context.mergeInputs.map((input, index) => buildMergeVideoFilterSegment(input, index, targetWidth, targetHeight, payload.config.upscaleMode, overlayStyle));
   const concatInputs = context.mergeInputs.map((_, index) => `[v${index}]`).join('');
-  const filterComplex = `${filterSegments.join(';')};${concatInputs}concat=n=${context.mergeInputs.length}:v=1:a=0[vout]`;
+  const hasAnyAudio = context.mergeInputs.some((input) => input.hasAudio);
+  const filterComplexParts = [...filterSegments];
+
+  if (hasAnyAudio) {
+    const audioSegments = context.mergeInputs.map((input, index) => {
+      const duration = formatDurationSeconds(input.durationSeconds);
+      if (input.hasAudio) {
+        return `[${index}:a]aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=async=1:first_pts=0,atrim=duration=${duration},apad=whole_dur=${duration}[a${index}]`;
+      }
+
+      return `anullsrc=r=48000:cl=stereo:d=${duration}[a${index}]`;
+    });
+    const concatAudioInputs = context.mergeInputs.map((_, index) => `[a${index}]`).join('');
+    filterComplexParts.push(...audioSegments);
+    filterComplexParts.push(`${concatAudioInputs}concat=n=${context.mergeInputs.length}:v=0:a=1[aout]`);
+  }
+
+  filterComplexParts.push(`${concatInputs}concat=n=${context.mergeInputs.length}:v=1:a=0[vout]`);
 
   return [
     '-y',
     ...context.mergeInputs.flatMap((input) => ['-i', input.path]),
-    '-filter_complex', filterComplex,
+    '-filter_complex', filterComplexParts.join(';'),
     '-map', '[vout]',
+    ...(hasAnyAudio ? ['-map', '[aout]'] : []),
     '-c:v', 'libx264',
-    '-preset', 'medium',
-    '-crf', '23',
+    '-preset', 'slow',
+    '-crf', '18',
     '-pix_fmt', 'yuv420p',
+    ...(hasAnyAudio ? ['-c:a', 'aac', '-b:a', '192k'] : []),
     '-movflags', '+faststart',
     outputPath,
   ];
@@ -267,6 +288,14 @@ function buildExportFrameArguments(payload: Extract<TaskPayload, { type: 'export
   }
 
   return ['-y', '-i', inputPath, '-vf', `fps=1/${payload.config.intervalSeconds ?? 5}`, outputPath];
+}
+
+function formatDurationSeconds(value?: number): string {
+  if (!value || !Number.isFinite(value) || value <= 0) {
+    return '0.1';
+  }
+
+  return Math.max(0.1, value).toFixed(3);
 }
 
 function mapVideoCodec(codec: 'h264' | 'hevc' | 'vp9'): string {

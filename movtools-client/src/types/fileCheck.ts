@@ -30,7 +30,7 @@ export interface LensLayoutCandidate {
 
 export interface LensLayoutVideoBinding {
   bindingId: string;
-  candidateId: string;
+  candidateId?: string;
   lensCode: string;
   fileName: string;
   relativePath: string;

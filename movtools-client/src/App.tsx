@@ -485,7 +485,7 @@ export default function App() {
     }
 
     if (primaryRole === 'maker') {
-      return item.id === 'dashboard' || item.id === 'lens' || item.id === 'settings';
+      return item.id === 'dashboard' || item.id === 'file-check' || item.id === 'lens' || item.id === 'settings';
     }
 
     return true;

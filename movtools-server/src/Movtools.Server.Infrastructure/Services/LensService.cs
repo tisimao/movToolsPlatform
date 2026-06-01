@@ -4,6 +4,7 @@ using Movtools.Server.Application.Exceptions;
 using Movtools.Server.Application.Interfaces;
 using Movtools.Server.Domain.Entities;
 using Movtools.Server.Infrastructure.Persistence;
+using Movtools.Server.Infrastructure.Sorting;
 using Movtools.Server.Infrastructure.Security;
 
 namespace Movtools.Server.Infrastructure.Services;
@@ -165,10 +166,9 @@ public sealed class LensService : ILensService
             query = query.Where(x => x.MakerUserId == currentUser.Id);
         }
 
-        var lenses = await query
-            .OrderBy(x => x.Sequence)
-            .ThenBy(x => x.Code)
-            .ToListAsync(cancellationToken);
+        var lenses = await query.ToListAsync(cancellationToken);
+
+        lenses.Sort(LensCodeNaturalComparer.Instance);
 
         var results = new List<LensResult>(lenses.Count);
         foreach (var lens in lenses)

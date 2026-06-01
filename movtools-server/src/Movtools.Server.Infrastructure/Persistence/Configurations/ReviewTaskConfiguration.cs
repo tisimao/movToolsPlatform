@@ -41,7 +41,7 @@ public sealed class ReviewTaskConfiguration : IEntityTypeConfiguration<ReviewTas
         builder.HasOne(x => x.CreatedByUser)
             .WithMany()
             .HasForeignKey(x => x.CreatedByUserId)
-            .OnDelete(DeleteBehavior.Restrict);
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(x => x.LensId);
         builder.HasIndex(x => x.Status);

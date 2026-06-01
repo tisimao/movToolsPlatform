@@ -18,6 +18,8 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
   const [message, setMessage] = useState<string | null>(null);
   const [manualActivationProjectId, setManualActivationProjectId] = useState<string | null>(null);
   const [manualProjectRootPath, setManualProjectRootPath] = useState('');
+  const [manualLensRootPath, setManualLensRootPath] = useState('');
+  const [manualLayoutRootPath, setManualLayoutRootPath] = useState('');
 
   const activeProject = useMemo(() => projects.find((item) => item.projectId === activeProjectId) ?? null, [activeProjectId, projects]);
   const accessibleProjects = projects;
@@ -91,7 +93,7 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
 
   async function handleActivateProject(
     projectId: string,
-    options?: { projectRootPath?: string },
+    options?: { projectRootPath?: string; lensFolderRootPath?: string; layoutCheckPath?: string },
   ): Promise<void> {
     setMessage(null);
     setLoadingProjects(true);
@@ -105,6 +107,9 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
 
       setWorkspace(response.workspace);
       setManualActivationProjectId(null);
+      setManualProjectRootPath('');
+      setManualLensRootPath('');
+      setManualLayoutRootPath('');
       const lensResponse = await lensService.listLenses();
       if (!lensResponse.success) {
         setMessage(lensResponse.error ?? '项目已激活，但镜头加载失败。');
@@ -119,13 +124,23 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
     }
   }
 
-  async function handlePickManualActivationPath(): Promise<void> {
+  async function handlePickManualActivationPath(target: 'project' | 'lens' | 'layout'): Promise<void> {
     const selected = await window.movtools.dialog.pickDirectory();
     if (!selected) {
       return;
     }
 
-    setManualProjectRootPath(selected);
+    switch (target) {
+      case 'project':
+        setManualProjectRootPath(selected);
+        break;
+      case 'lens':
+        setManualLensRootPath(selected);
+        break;
+      case 'layout':
+        setManualLayoutRootPath(selected);
+        break;
+    }
   }
 
   return (
@@ -184,7 +199,7 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
                     <span className={isActive ? 'environment-pill ready' : 'environment-pill info'}>{isActive ? '当前激活' : '可激活'}</span>
                   </div>
                 <small className="muted">镜头根：{project.lensFolderRootPath || '未配置'} · Layout 根：{project.layoutCheckPath || '未配置'}</small>
-                <small className="muted">ma 检查：{project.maCheckPath || '未配置'} · mov 检查：{project.movCheckPath || '未配置'}</small>
+                <small className="muted">镜头文件根目录：{project.lensRoots?.length ?? 0} 个 · Layout 根目录：{project.layoutRoots?.length ?? 0} 个</small>
                 <small className="muted">版本 {project.versionTag ?? 'ANI'} · Layout {project.layoutTag ?? 'LAY'}</small>
                 <div className="actions-row compact-actions wrap-actions">
                   <button className="secondary-button" disabled={isActive || loadingProjects} onClick={() => void handleActivateProject(project.projectId)} type="button">
@@ -193,20 +208,37 @@ export function DashboardPage({ onOpenLens }: DashboardPageProps) {
                 </div>
                 {isManualActivationTarget ? (
                   <div className="stack-gap compact-gap" style={{ marginTop: '0.75rem' }}>
-                    <small className="muted">激活失败时只需重选项目根目录；镜头根目录和 Layout 根目录会自动按新盘符重映射。</small>
+                    <small className="muted">激活失败时，请指定本机路径。镜头文件根目录和 Layout 根目录为可选，不填则自动按项目根目录盘符重映射。</small>
                     <label className="field">
-                      <span>项目根目录</span>
+                      <span>项目根目录（必填）</span>
                       <div className="inline-field-actions">
                         <input value={manualProjectRootPath} onChange={(event) => setManualProjectRootPath(event.target.value)} placeholder={project.projectRootPath || '手动选择本机项目根目录'} />
-                        <button className="secondary-button" disabled={loadingProjects} onClick={() => void handlePickManualActivationPath()} type="button">选择</button>
+                        <button className="secondary-button" disabled={loadingProjects} onClick={() => void handlePickManualActivationPath('project')} type="button">选择</button>
                       </div>
                     </label>
-                    <small className="muted">镜头根目录和 Layout 根目录会沿用服务端路径，只替换为你选定的项目盘符。</small>
+                    <label className="field">
+                      <span>镜头文件根目录（可选）</span>
+                      <div className="inline-field-actions">
+                        <input value={manualLensRootPath} onChange={(event) => setManualLensRootPath(event.target.value)} placeholder={project.lensFolderRootPath || '自动按项目根目录盘符重映射'} />
+                        <button className="secondary-button" disabled={loadingProjects} onClick={() => void handlePickManualActivationPath('lens')} type="button">选择</button>
+                      </div>
+                    </label>
+                    <label className="field">
+                      <span>Layout 根目录（可选）</span>
+                      <div className="inline-field-actions">
+                        <input value={manualLayoutRootPath} onChange={(event) => setManualLayoutRootPath(event.target.value)} placeholder={project.layoutCheckPath || '自动按项目根目录盘符重映射'} />
+                        <button className="secondary-button" disabled={loadingProjects} onClick={() => void handlePickManualActivationPath('layout')} type="button">选择</button>
+                      </div>
+                    </label>
                     <div className="actions-row compact-actions wrap-actions">
                       <button
                         className="primary-button"
-                        disabled={loadingProjects}
-                        onClick={() => void handleActivateProject(project.projectId, { projectRootPath: manualProjectRootPath })}
+                        disabled={loadingProjects || !manualProjectRootPath.trim()}
+                        onClick={() => void handleActivateProject(project.projectId, {
+                          projectRootPath: manualProjectRootPath,
+                          lensFolderRootPath: manualLensRootPath || undefined,
+                          layoutCheckPath: manualLayoutRootPath || undefined,
+                        })}
                         type="button"
                       >
                         应用并重试

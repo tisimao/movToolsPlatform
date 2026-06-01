@@ -244,6 +244,7 @@ export interface FileExistsRequest {
 export interface FileExistsResponse {
   success: boolean;
   exists: boolean;
+  permissionDenied?: boolean;
   error?: string;
 }
 
@@ -580,11 +581,13 @@ export interface GenerateExtractPreviewRequest {
   lensStatus?: LensStatus | '';
   versionNum?: string;
   fileSelection: ExtractFileSelection;
+  renameFiles?: boolean;
 }
 
 export interface ExecuteExtractRequest {
   previewId: string;
   targetPath: string;
+  selectedItemIds?: string[];
 }
 
 export interface ExtractActionResponse {
@@ -650,6 +653,7 @@ export const updateSettingsSchema = z.object({
   defaultOutputDir: z.string().optional(),
   autoOpenOutputDir: z.boolean().optional(),
   logRetentionDays: z.number().int().positive().optional(),
+  renameDuringExtract: z.boolean().optional(),
 });
 
 const scanRootConfigItemSchema = z.object({
@@ -876,11 +880,13 @@ export const generateExtractPreviewRequestSchema = z.object({
   lensStatus: z.enum(['', '制作', '提交', '返修', '通过', '关闭']).optional(),
   versionNum: z.string().optional(),
   fileSelection: z.enum(['ma', 'mov', 'ma+mov']),
+  renameFiles: z.boolean().optional(),
 });
 
 export const executeExtractRequestSchema = z.object({
   previewId: z.string().min(1),
   targetPath: z.string().min(1),
+  selectedItemIds: z.array(z.string().min(1)).optional(),
 });
 
 export interface MovtoolsApi {

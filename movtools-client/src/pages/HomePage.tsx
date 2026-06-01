@@ -3,6 +3,7 @@ import { EnvironmentStatusCard } from '../components/EnvironmentStatusCard';
 import { OutputDirectoryPicker } from '../components/OutputDirectoryPicker';
 import { TaskList } from '../components/TaskList';
 import { validateMergeInput } from '../lib/validators';
+import { compareLensCode } from '../lib/lensCodeSort';
 import { useProjectStore } from '../stores/projectStore';
 import { emptyCreateTaskResponse, useTaskStore } from '../stores/taskStore';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -456,7 +457,7 @@ export function HomePage({
 
   /**
    * 可用于审阅的镜头列表（已排除关闭状态的镜头，且具有可用素材来源或layout候选）
-   * 按场次升序、镜头编号汉字排序
+   * 按镜头号自然排序
    */
   const reviewPoolLenses = useMemo(
     () => availableLenses
@@ -465,12 +466,7 @@ export function HomePage({
         const availability = sourceAvailabilityMap[lens.lensId];
         return (availability?.options.length ?? 0) > 0 || lens.layoutCandidateCount > 0;
       })
-      .sort((left, right) => {
-        if (left.sceneNo !== right.sceneNo) {
-          return left.sceneNo - right.sceneNo;
-        }
-        return left.lensCode.localeCompare(right.lensCode, 'zh-CN');
-      }),
+      .sort((left, right) => compareLensCode(left.lensCode, right.lensCode)),
     [availableLenses, sourceAvailabilityMap],
   );
 
@@ -1098,12 +1094,7 @@ export function HomePage({
    }
 
   function handleSortSelectedClips(): void {
-    setSelectedClips((current) => [...current].sort((left, right) => {
-      if (left.sceneNo !== right.sceneNo) {
-        return left.sceneNo - right.sceneNo;
-      }
-      return left.lensCode.localeCompare(right.lensCode, 'zh-CN');
-    }));
+    setSelectedClips((current) => [...current].sort((left, right) => compareLensCode(left.lensCode, right.lensCode)));
     setCreateResult(emptyCreateTaskResponse);
   }
 
@@ -1360,7 +1351,7 @@ export function HomePage({
             </div>
             <div className="actions-row compact-actions wrap-actions home-selected-actions">
               <span className="muted">已选 {selectedClips.length} 条</span>
-              <button className="secondary-button" disabled={selectedClips.length < 2} onClick={handleSortSelectedClips} type="button">按场次 / 镜头号重排</button>
+              <button className="secondary-button" disabled={selectedClips.length < 2} onClick={handleSortSelectedClips} type="button">按镜头号重排</button>
               <button className="secondary-button" disabled={selectedClips.length === 0} onClick={handleClearSelectedClips} type="button">清空拼接列表</button>
             </div>
           </div>

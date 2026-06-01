@@ -40,7 +40,7 @@ public sealed record ReviewTaskResult(
     DateTimeOffset? SubmittedAtUtc,
     DateTimeOffset? CompletedAtUtc,
     DateTimeOffset? DueAtUtc,
-    Guid CreatedByUserId,
+    Guid? CreatedByUserId,
     string CreatedByUserName,
     long RowVersion,
     DateTimeOffset CreatedAtUtc,
@@ -58,7 +58,7 @@ public sealed record ReviewTaskResult(
 public sealed record ReviewCommentResult(
     Guid Id,
     Guid ReviewTaskId,
-    Guid CreatedByUserId,
+    Guid? CreatedByUserId,
     string CreatedByUserName,
     string Content,
     string? DecisionCode,

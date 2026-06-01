@@ -13,6 +13,7 @@ const defaultSettings: AppSettings = {
   defaultOutputDir: '',
   autoOpenOutputDir: false,
   logRetentionDays: 7,
+  renameDuringExtract: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set) => ({

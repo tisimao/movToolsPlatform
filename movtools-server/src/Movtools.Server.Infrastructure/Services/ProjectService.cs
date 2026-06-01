@@ -584,10 +584,63 @@ public sealed class ProjectService : IProjectService
 
     private async Task RemoveProjectScopedDataAsync(Project project, CancellationToken cancellationToken)
     {
+        var episodes = await _dbContext.Episodes
+            .Where(x => x.ProjectId == project.Id)
+            .ToListAsync(cancellationToken);
+        var episodeIds = episodes.Select(x => x.Id).ToList();
+
+        var lenses = await _dbContext.Lenses
+            .Where(x => episodeIds.Contains(x.EpisodeId))
+            .ToListAsync(cancellationToken);
+        var lensIds = lenses.Select(x => x.Id).ToList();
+
+        var orphanTaskShots = await _dbContext.ReviewTaskShots
+            .Where(x => lensIds.Contains(x.LensId))
+            .ToListAsync(cancellationToken);
+        if (orphanTaskShots.Count > 0)
+        {
+            _dbContext.ReviewTaskShots.RemoveRange(orphanTaskShots);
+        }
+
+        var orphanTasks = await _dbContext.ReviewTasks
+            .Where(x => x.LensId.HasValue && lensIds.Contains(x.LensId.Value))
+            .ToListAsync(cancellationToken);
+        foreach (var task in orphanTasks)
+        {
+            task.LensId = null;
+        }
+
+        var reviewTasks = await _dbContext.ReviewTasks
+            .Where(x => x.ProjectCode == project.Code)
+            .ToListAsync(cancellationToken);
+        if (reviewTasks.Count > 0)
+        {
+            var reviewTaskIds = reviewTasks.Select(x => x.Id).ToList();
+
+            var reviewTaskShots = await _dbContext.ReviewTaskShots
+                .Where(x => reviewTaskIds.Contains(x.ReviewTaskId))
+                .ToListAsync(cancellationToken);
+            if (reviewTaskShots.Count > 0)
+            {
+                _dbContext.ReviewTaskShots.RemoveRange(reviewTaskShots);
+            }
+
+            _dbContext.ReviewTasks.RemoveRange(reviewTasks);
+        }
+
+        if (lenses.Count > 0)
+        {
+            _dbContext.Lenses.RemoveRange(lenses);
+        }
+
+        if (episodes.Count > 0)
+        {
+            _dbContext.Episodes.RemoveRange(episodes);
+        }
+
         var members = await _dbContext.ProjectMembers
             .Where(x => x.ProjectCode == project.Code)
             .ToListAsync(cancellationToken);
-
         if (members.Count > 0)
         {
             _dbContext.ProjectMembers.RemoveRange(members);

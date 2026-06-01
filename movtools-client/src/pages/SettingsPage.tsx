@@ -213,6 +213,11 @@ export function SettingsPage({
             value={draft.logRetentionDays}
           />
         </label>
+        <label className="checkbox-field">
+          <input checked={draft.renameDuringExtract} onChange={(event) => setDraft({ ...draft, renameDuringExtract: event.target.checked })} type="checkbox" />
+          <span>提取文件时自动改名</span>
+          <span className="muted" style={{ marginLeft: '0.5rem' }}>开启后按"镜头名称_ani_版本号"规则重命名；关闭则保留原始文件名直接拷贝。</span>
+        </label>
 
         <div className="actions-row wrap-actions settings-form-actions">
           <button className="primary-button" onClick={() => void handleSave()} type="button">

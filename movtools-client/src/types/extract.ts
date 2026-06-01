@@ -20,6 +20,7 @@ export interface ExtractPreviewItem {
   fileName: string;
   fileType: BindFileType;
   sourcePath: string;
+  sourceFileName: string;
   targetFileName: string;
 }
 

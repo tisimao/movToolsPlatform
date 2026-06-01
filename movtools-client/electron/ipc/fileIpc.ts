@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { readFileAsBase64 } from '../services/file/fileService';
-import { access } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 
 export function registerFileIpc(): void {
   ipcMain.handle('file:exists', async (_event, request: { path: string }) => {
@@ -11,9 +11,23 @@ export function registerFileIpc(): void {
 
     try {
       await access(targetPath);
-      return { success: true, exists: true };
-    } catch {
-      return { success: true, exists: false };
+      return { success: true, exists: true, permissionDenied: false };
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        return { success: true, exists: true, permissionDenied: true };
+      }
+
+      try {
+        await stat(targetPath);
+        return { success: true, exists: true, permissionDenied: false };
+      } catch (statError: unknown) {
+        const statCode = (statError as NodeJS.ErrnoException).code;
+        if (statCode === 'EACCES' || statCode === 'EPERM') {
+          return { success: true, exists: true, permissionDenied: true };
+        }
+        return { success: true, exists: false, permissionDenied: false };
+      }
     }
   });
 

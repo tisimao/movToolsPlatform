@@ -160,11 +160,11 @@ function getRootConflictMessage(lensRoots: ScanRootConfigItem[], layoutRoots: Sc
       const normalizedLens = normalizeComparablePath(lensPath);
       const normalizedLayout = normalizeComparablePath(layoutPath);
       if (normalizedLens === normalizedLayout) {
-        return `检测到镜头根目录与 Layout 根目录重复：${lensPath}`;
+        return `检测到镜头文件根目录与 Layout 根目录重复：${lensPath}`;
       }
 
       if (normalizedLayout.startsWith(`${normalizedLens}\\`) || normalizedLens.startsWith(`${normalizedLayout}\\`)) {
-        return `检测到镜头根目录与 Layout 根目录存在包含关系：镜头 ${lensPath} ↔ Layout ${layoutPath}`;
+        return `检测到镜头文件根目录与 Layout 根目录存在包含关系：镜头 ${lensPath} ↔ Layout ${layoutPath}`;
       }
     }
   }
@@ -206,12 +206,12 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
    */
   const [initExcelPath, setInitExcelPath] = useState('');
   /**
-   * 镜头根目录配置状态和设置器
+    * 镜头文件根目录配置状态和设置器
    * 存储镜头文件的根目录配置列表，初始包含一个MA类型的根目录
    */
   const [lensRoots, setLensRoots] = useState<ScanRootConfigItem[]>([createRootItem('ma')]);
   /**
-   * Layout根目录配置状态和设置器
+    * Layout 根目录配置状态和设置器
    * 存储Layout文件的根目录配置列表，初始包含一个layout类型的根目录
    */
   const [layoutRoots, setLayoutRoots] = useState<ScanRootConfigItem[]>([createRootItem('layout')]);
@@ -231,12 +231,12 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
    */
   const [episodeInitExcelPath, setEpisodeInitExcelPath] = useState('');
   /**
-   * 新增集镜头根目录配置状态和设置器
+    * 新增集镜头文件根目录配置状态和设置器
    * 存储新增集的镜头文件根目录配置列表，初始包含一个MA类型的根目录
    */
   const [episodeLensRoots, setEpisodeLensRoots] = useState<ScanRootConfigItem[]>([createRootItem('ma')]);
   /**
-   * 新增集Layout根目录配置状态和设置器
+    * 新增集 Layout 根目录配置状态和设置器
    * 存储新增集的Layout文件根目录配置列表，初始包含一个layout类型的根目录
    */
   const [episodeLayoutRoots, setEpisodeLayoutRoots] = useState<ScanRootConfigItem[]>([createRootItem('layout')]);
@@ -342,13 +342,13 @@ export function ProjectPage({ onProjectReady }: ProjectPageProps) {
   const activeEpisode = useMemo(() => episodes.find((entry) => entry.episodeId === activeEpisodeId) ?? null, [activeEpisodeId, episodes]);
   /**
    * 创建项目时的根目录冲突消息（备忘录）
-   * 检查镜头根目录和Layout根目录是否存在冲突（重复或包含关系）
+    * 检查镜头文件根目录和 Layout 根目录是否存在冲突（重复或包含关系）
    * 依赖lensRoots和layoutRoots的变化
    */
   const createRootConflictMessage = useMemo(() => getRootConflictMessage(lensRoots, layoutRoots), [layoutRoots, lensRoots]);
   /**
    * 创建集时的根目录冲突消息（备忘录）
-   * 检查新增集的镜头根目录和Layout根目录是否存在冲突（重复或包含关系）
+    * 检查新增集的镜头文件根目录和 Layout 根目录是否存在冲突（重复或包含关系）
    * 依赖episodeLensRoots和episodeLayoutRoots的变化
    */
   const episodeRootConflictMessage = useMemo(() => getRootConflictMessage(episodeLensRoots, episodeLayoutRoots), [episodeLayoutRoots, episodeLensRoots]);
@@ -602,7 +602,7 @@ async function loadEpisodes(projectId?: string): Promise<void> {
          <div className="section-heading">
            <div>
              <h4>{title}</h4>
-             <p className="muted">支持多个团队同时配置，系统会按优先级处理。镜头根目录可单独绑定初始化 Excel。</p>
+             <p className="muted">支持多个团队同时配置，系统会按优先级处理。镜头文件根目录可单独绑定初始化 Excel。</p>
            </div>
            <button className="secondary-button" disabled={isSubmitting} onClick={() => addRootItem(roots, setter, fileKind)} type="button">新增根目录</button>
          </div>
@@ -732,7 +732,7 @@ async function loadEpisodes(projectId?: string): Promise<void> {
     */
    async function handleCreateProject(): Promise<void> {
      if (!projectName.trim() || !projectRootPath.trim() || !initialEpisodeCode.trim() || !hasValidRoots(lensRoots) || !hasValidRoots(layoutRoots)) {
-       setResult({ success: false, error: '请先填写剧项目名称、项目根目录、首集编号，并至少配置一个启用的首集镜头根目录和 layout 根目录。' });
+       setResult({ success: false, error: '请先填写剧项目名称、项目根目录、首集编号，并至少配置一个启用的首集镜头文件根目录和 Layout 根目录。' });
        return;
      }
 
@@ -941,7 +941,7 @@ setIsSubmitting(true);
      }
  
      if (!episodeCode.trim() || !hasValidRoots(episodeLensRoots) || !hasValidRoots(episodeLayoutRoots)) {
-       setEpisodeResult({ success: false, error: '请先填写集编号，并至少配置一个启用的该集镜头根目录和 layout 根目录。' });
+       setEpisodeResult({ success: false, error: '请先填写集编号，并至少配置一个启用的该集镜头文件根目录和 Layout 根目录。' });
        return;
      }
  
@@ -1029,7 +1029,7 @@ setIsSubmitting(true);
           <div className="section-heading">
             <div>
               <h3>新建剧项目 + 首集</h3>
-              <p className="muted">创建项目时同时创建首集；如有多个镜头根目录，请分别给每个根目录配置对应初始化 Excel。</p>
+              <p className="muted">创建项目时同时创建首集；如有多个镜头文件根目录，请分别给每个根目录配置对应初始化 Excel。</p>
             </div>
           </div>
 
@@ -1075,7 +1075,7 @@ setIsSubmitting(true);
           <label className="field">
             <span>首集初始化 Excel（兼容旧流程，可选）</span>
             <div className="inline-field-actions">
-              <input onChange={(event) => setInitExcelPath(event.target.value)} placeholder="未按根目录单独配置时，默认绑定到主镜头根目录" value={initExcelPath} />
+                <input onChange={(event) => setInitExcelPath(event.target.value)} placeholder="未按根目录单独配置时，默认绑定到主镜头文件根目录" value={initExcelPath} />
               <button className="secondary-button" disabled={isSubmitting} onClick={() => void handlePickInitExcel(setInitExcelPath)} type="button">
                 选择文件
               </button>
@@ -1190,7 +1190,7 @@ setIsSubmitting(true);
                 <div><span className="muted">项目 Layout 主根目录：</span>{activeProject.layoutCheckPath || '未配置'}</div>
                 <div><span className="muted">数据库：</span>{activeProject.databasePath}</div>
                 <div><span className="muted">备份目录：</span>{activeProject.backupDir}</div>
-                {renderRootSummary('项目镜头根目录明细', activeProject.lensRoots, '未配置')}
+                {renderRootSummary('项目镜头文件根目录明细', activeProject.lensRoots, '未配置')}
                 {renderRootSummary('项目 Layout 根目录明细', activeProject.layoutRoots, '未配置')}
                 {activeEpisode ? renderRootSummary('当前集镜头根目录', activeEpisode.lensRoots, '未配置') : null}
                 {activeEpisode ? renderRootSummary('当前集 Layout 根目录', activeEpisode.layoutRoots, '未配置') : null}

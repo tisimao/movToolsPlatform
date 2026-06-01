@@ -37,7 +37,7 @@ public sealed class ReviewCommentConfiguration : IEntityTypeConfiguration<Review
         builder.HasOne(x => x.CreatedByUser)
             .WithMany()
             .HasForeignKey(x => x.CreatedByUserId)
-            .OnDelete(DeleteBehavior.Restrict);
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(x => x.ReviewTaskId);
         builder.HasIndex(x => x.LensId);

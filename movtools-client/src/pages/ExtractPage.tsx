@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ExtractActionResponse, ExtractProgressEvent, GenerateExtractPreviewRequest } from '../types/ipc';
+import type { AppSettings, ExtractActionResponse, ExtractProgressEvent, GenerateExtractPreviewRequest } from '../types/ipc';
 import type { ExtractFileSelection } from '../types/extract';
 import type { LensStatus } from '../types/lens';
 import { useExtractStore } from '../stores/extractStore';
 import { useProjectStore } from '../stores/projectStore';
+import { useSettingsStore } from '../stores/settingsStore';
 
 /**
  * 创建一个空的提取操作响应对象
@@ -29,13 +30,14 @@ function isExecutionResult(result: ExtractActionResponse): boolean {
  */
 export function ExtractPage() {
   const { activeProjectId } = useProjectStore();
-  const { history, previewId, previewItems, setHistory, setPreview } = useExtractStore();
+  const { history, previewId, previewItems, removePreviewItem, setHistory, setPreview } = useExtractStore();
   const [filters, setFilters] = useState<GenerateExtractPreviewRequest>({
     lensCode: '',
     maker: '',
     lensStatus: '',
     versionNum: '',
     fileSelection: 'ma+mov',
+    renameFiles: false,
   });
   const [targetPath, setTargetPath] = useState('');
   const [listConfirmed, setListConfirmed] = useState(false);
@@ -44,6 +46,8 @@ export function ExtractPage() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [progressLogs, setProgressLogs] = useState<ExtractProgressEvent[]>([]);
   const executionResultRef = useRef<HTMLElement | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const { settings } = useSettingsStore();
 
    /**
     * 刷新提取历史记录
@@ -72,10 +76,10 @@ export function ExtractPage() {
    }, []);
 
    /**
-    * 当活动项目ID变化时执行的副作用
-    * 刷新历史、重置预览状态、清除日志和结果
-    * @param activeProjectId 活动项目ID的变化触发此效果
-    */
+     * 当活动项目ID变化时执行的副作用
+     * 刷新历史、重置预览状态、清除日志和结果
+     * @param activeProjectId 活动项目ID的变化触发此效果
+     */
    useEffect(() => {
      void refreshHistory();
      setPreview({ previewId: null, previewItems: [] });
@@ -84,6 +88,29 @@ export function ExtractPage() {
      setProgressLogs([]);
      setResult(emptyAction());
    }, [activeProjectId]);
+
+   /**
+     * 当预览列表变化时，默认全选所有项
+     */
+    useEffect(() => {
+      setSelectedItemIds((current) => {
+        if (current.length === 0) {
+          return previewItems.map((item) => item.itemId);
+        }
+
+        const visibleIds = new Set(previewItems.map((item) => item.itemId));
+        const retained = current.filter((itemId) => visibleIds.has(itemId));
+        return retained.length > 0 ? retained : previewItems.map((item) => item.itemId);
+      });
+      setListConfirmed(false);
+    }, [previewItems]);
+
+   useEffect(() => {
+     setFilters((current) => ({
+       ...current,
+       renameFiles: settings.renameDuringExtract,
+     }));
+   }, [settings.renameDuringExtract]);
 
    /**
     * 处理选择目标路径按钮点击事件
@@ -100,22 +127,29 @@ export function ExtractPage() {
     * 处理生成预览列表按钮点击事件
     * 根据当前过滤条件生成待提取文件的预览列表
     */
-   async function handleGeneratePreview(): Promise<void> {
-     const response = await window.movtools.extract.preview(filters);
+    async function handleGeneratePreview(): Promise<void> {
+      const response = await window.movtools.extract.preview(filters);
      setResult(response.success ? { success: true } : { success: false, error: response.error });
      setLastExecutionResult(null);
      setProgressLogs([]);
-     setPreview({ previewId: response.previewId ?? null, previewItems: response.items });
-     setListConfirmed(false);
-   }
+      setPreview({ previewId: response.previewId ?? null, previewItems: response.items });
+      setListConfirmed(false);
+    }
+
+    function handleRemovePreviewItem(itemId: string): void {
+      removePreviewItem(itemId);
+      setSelectedItemIds((current) => current.filter((id) => id !== itemId));
+      setListConfirmed(false);
+      setResult({ success: true });
+    }
 
    /**
     * 处理确认提取列表按钮点击事件
     * 将当前预览列表确认为待提取的正式列表
     */
    function handleConfirmList(): void {
-     if (previewItems.length === 0) {
-       setResult({ success: false, error: '请先生成非空的待提取列表。' });
+     if (selectedItemIds.length === 0) {
+       setResult({ success: false, error: '请先勾选待提取的文件。' });
        return;
      }
      setListConfirmed(true);
@@ -143,10 +177,10 @@ export function ExtractPage() {
        return;
      }
 
-     setIsExecuting(true);
-     setProgressLogs([]);
-     try {
-       const response = await window.movtools.extract.execute({ previewId, targetPath: targetPath.trim() });
+      setIsExecuting(true);
+      setProgressLogs([]);
+      try {
+        const response = await window.movtools.extract.execute({ previewId, targetPath: targetPath.trim(), selectedItemIds });
        setResult(response);
        setLastExecutionResult(isExecutionResult(response) ? response : null);
        if (response.fileTotal !== undefined) {
@@ -173,6 +207,30 @@ export function ExtractPage() {
    async function handleOpenTarget(target: string): Promise<void> {
      const response = await window.movtools.extract.openTarget(target);
      setResult(response);
+   }
+
+   function toggleItem(itemId: string): void {
+     setSelectedItemIds((current) =>
+       current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId],
+     );
+   }
+
+   function handleSelectAll(): void {
+     setSelectedItemIds(previewItems.map((item) => item.itemId));
+   }
+
+   function handleInvertSelection(): void {
+     const visibleIds = previewItems.map((item) => item.itemId);
+     setSelectedItemIds((current) => {
+       const currentSet = new Set(current);
+       const toToggle = visibleIds.filter((id) => !currentSet.has(id));
+       const keep = current.filter((id) => !visibleIds.includes(id));
+       return [...keep, ...toToggle];
+     });
+   }
+
+   function handleClearSelection(): void {
+     setSelectedItemIds([]);
    }
 
   return (
@@ -228,6 +286,10 @@ export function ExtractPage() {
                 <option value="mov">仅 mov</option>
               </select>
             </label>
+            <label className="checkbox-field">
+              <input checked={Boolean(filters.renameFiles)} onChange={(event) => setFilters((current) => ({ ...current, renameFiles: event.target.checked }))} type="checkbox" />
+              <span>本次提取按系统规则改名</span>
+            </label>
             <label className="field">
               <span>目标提取路径</span>
               <div className="picker-row">
@@ -239,8 +301,11 @@ export function ExtractPage() {
 
           <div className="actions-row wrap-actions">
             <button className="primary-button" disabled={!activeProjectId} onClick={() => void handleGeneratePreview()} type="button">生成提取列表</button>
-            <button className="secondary-button" disabled={previewItems.length === 0} onClick={handleConfirmList} type="button">确认提取列表</button>
+            <button className="secondary-button" disabled={selectedItemIds.length === 0} onClick={handleConfirmList} type="button">确认提取列表</button>
             <button className="secondary-button" disabled={!listConfirmed || isExecuting} onClick={() => void handleExecuteExtract()} type="button">{isExecuting ? '提取中…' : '确认并提取'}</button>
+            <span className="muted" style={{ fontSize: '0.85em' }}>
+              默认策略：{settings.renameDuringExtract ? '自动改名' : '保持原名'} · 本次执行：{filters.renameFiles ? '自动改名' : '保持原名'}
+            </span>
             <span className={result.success ? 'success-copy' : 'danger-copy'}>
               {isExecuting ? '正在提取文件，请稍候…' : result.success ? (listConfirmed ? '提取列表已锁定，可直接开始提取。' : '准备就绪。') : result.error ?? '准备就绪。'}
             </span>
@@ -312,23 +377,51 @@ export function ExtractPage() {
           <div className="section-heading">
             <div>
               <h3>待提取文件列表</h3>
-              <p className="muted">共 {previewItems.length} 项。{listConfirmed ? '当前列表已锁定。' : '生成后需手动确认。'}</p>
+              <p className="muted">
+                共 {previewItems.length} 项，已选 {selectedItemIds.length} 项。
+                {listConfirmed ? '当前列表已锁定。' : '勾选后确认即可提取。'}
+                {settings.renameDuringExtract ? ' 已开启自动改名。' : ' 保持原始文件名。'}
+              </p>
             </div>
+            {!listConfirmed && previewItems.length > 0 ? (
+              <div className="actions-row compact-actions">
+                <button className="secondary-button" onClick={handleSelectAll} type="button">全选</button>
+                <button className="secondary-button" onClick={handleInvertSelection} type="button">反选</button>
+                <button className="secondary-button" onClick={handleClearSelection} type="button">清空</button>
+              </div>
+            ) : null}
           </div>
 
           {previewItems.length > 0 ? (
             <div className="lens-list">
               {previewItems.map((item) => (
-                <article className="lens-card" key={item.itemId}>
-                  <div className="section-heading">
-                    <div>
-                      <h3>{item.lensCode}</h3>
-                      <p className="muted">{item.versionNum} · {item.fileType} · {item.fileName}</p>
+                <article className={`lens-card ${!listConfirmed ? 'selectable-card' : ''}`} key={item.itemId}>
+                  {!listConfirmed ? (
+                    <label className="section-heading card-selectable-heading">
+                      <input checked={selectedItemIds.includes(item.itemId)} onChange={() => toggleItem(item.itemId)} type="checkbox" />
+                      <div>
+                        <h3>{item.lensCode}</h3>
+                        <p className="muted">{item.versionNum} · {item.fileType} · {item.fileName}</p>
+                      </div>
+                      <span className={extractLensStatusClassName(item.lensStatus)}>{item.lensStatus}</span>
+                    </label>
+                  ) : (
+                    <div className="section-heading">
+                      <div>
+                        <h3>{item.lensCode}</h3>
+                        <p className="muted">{item.versionNum} · {item.fileType} · {item.fileName}</p>
+                      </div>
+                      <span className={extractLensStatusClassName(item.lensStatus)}>{item.lensStatus}</span>
                     </div>
-                    <span className={extractLensStatusClassName(item.lensStatus)}>{item.lensStatus}</span>
-                  </div>
+                  )}
                   <small className="muted">源文件：{item.sourcePath}</small>
+                  <small className="muted">原文件名：{item.sourceFileName}</small>
                   <small className="muted">目标文件名：{item.targetFileName}</small>
+                  {!listConfirmed ? (
+                    <div className="actions-row compact-actions">
+                      <button className="secondary-button" onClick={() => handleRemovePreviewItem(item.itemId)} type="button">移除</button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
