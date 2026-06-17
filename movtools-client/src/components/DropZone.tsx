@@ -49,9 +49,13 @@ export function DropZone({ multiple = true, selectedFiles, onFilesSelected }: Dr
    */
   function handleDrop(event: DragEvent<HTMLDivElement>): void {
     event.preventDefault();
-    const filePaths = Array.from(event.dataTransfer.files)
-      .map((file) => (file as DroppedFile).path)
-      .filter((filePath): filePath is string => Boolean(filePath));
+    const files = Array.from(event.dataTransfer.files);
+    const bridgedPaths = window.movtools.dialog.getDroppedFilePaths?.(files) ?? [];
+    const filePaths = bridgedPaths.length > 0
+      ? bridgedPaths
+      : files
+        .map((file) => (file as DroppedFile).path)
+        .filter((filePath): filePath is string => Boolean(filePath));
 
     if (filePaths.length > 0) {
       onFilesSelected(uniqueFiles(multiple ? filePaths : filePaths.slice(0, 1)));

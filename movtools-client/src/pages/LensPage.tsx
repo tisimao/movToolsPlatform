@@ -5,7 +5,7 @@ import { canUseLocalFileChecks as canUseLocalFileChecksPermission, getPrimaryRol
 import { useAuthStore } from '../auth/store';
 import type { BindFileType } from '../types/fileCheck';
 import type { LensDetailPayload, LensLifecycleAttachment, LensLifecycleEvent, LensRecentStatusAction, LensRecord, LensStatus, LensStatusAction, LensVersionBinding, LensVersionIssue, LensVersionMatchDebug, MakerMatchStatus } from '../types/lens';
-import type { LensMutationResponse } from '../types/ipc';
+import type { LensMutationResponse, VersionUploadConflictStrategy, VersionUploadItem, VersionUploadItemStatus, VersionUploadResponse } from '../types/ipc';
 import { getBaseName, arrayBufferToBase64, pickImageFiles, extractPastedImages } from '../lib/imageAttachment';
 import { resolveImageUrl } from '../lib/imageUrl';
 import { useLensStore } from '../stores/lensStore';
@@ -151,6 +151,14 @@ interface ReworkAttachmentPreviewState {
 
 
 /** 镜头表单默认值 */
+interface VersionUploadDialogState {
+  sourcePaths: string[];
+  conflictStrategy: VersionUploadConflictStrategy;
+  preview: VersionUploadResponse | null;
+  isPreparing: boolean;
+  isCommitting: boolean;
+}
+
 const defaultForm: LensFormState = {
   lensCode: '',
   sceneNo: '',
@@ -261,6 +269,59 @@ function emptyMutation(): LensMutationResponse {
   return { success: true };
 }
 
+function emptyVersionUploadState(): VersionUploadDialogState {
+  return {
+    sourcePaths: [],
+    conflictStrategy: 'skip',
+    preview: null,
+    isPreparing: false,
+    isCommitting: false,
+  };
+}
+
+function getVersionUploadStatusLabel(status: VersionUploadItemStatus): string {
+  switch (status) {
+    case 'ready':
+      return '可归档';
+    case 'will-overwrite':
+      return '将覆盖';
+    case 'exists-skip':
+      return '已存在，跳过';
+    case 'missing-target-folder':
+      return '目标文件夹不存在';
+    case 'unmatched-lens':
+      return '无匹配镜头';
+    case 'invalid-name':
+      return '命名不合规';
+    case 'unsupported-type':
+      return '类型不支持';
+    case 'missing-source':
+      return '源文件不存在';
+    case 'copied':
+      return '已归档';
+    case 'overwritten':
+      return '已覆盖';
+    case 'skipped':
+      return '已跳过';
+    case 'copy-failed':
+      return '归档失败';
+    default:
+      return status;
+  }
+}
+
+function getVersionUploadStatusClassName(status: VersionUploadItemStatus): string {
+  if (status === 'ready' || status === 'copied' || status === 'overwritten') {
+    return 'environment-pill ready';
+  }
+
+  if (status === 'will-overwrite' || status === 'exists-skip' || status === 'skipped') {
+    return 'environment-pill warning';
+  }
+
+  return 'environment-pill blocked';
+}
+
 /** LensPage 组件属性：可选的页面导航回调 */
 interface LensPageProps {
   onNavigate?: (page: string) => void;
@@ -295,6 +356,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
   const [form, setForm] = useState<LensFormState>(defaultForm);
   const [editingLensId, setEditingLensId] = useState<string | null>(null);
   const [result, setResult] = useState<LensMutationResponse>(emptyMutation);
+  const [versionUploadDialog, setVersionUploadDialog] = useState<VersionUploadDialogState | null>(null);
 
   /* ========== 加载状态 ========== */
   const [isLoading, setIsLoading] = useState(false);
@@ -2131,6 +2193,102 @@ export function LensPage({ onNavigate }: LensPageProps) {
     }
   }
 
+  function openVersionUploadDialog(): void {
+    setVersionUploadDialog(emptyVersionUploadState());
+  }
+
+  function closeVersionUploadDialog(): void {
+    setVersionUploadDialog(null);
+  }
+
+  function mergeVersionUploadPaths(paths: string[]): void {
+    const nextPaths = paths.filter((item) => item.trim());
+    if (nextPaths.length === 0) {
+      return;
+    }
+
+    setVersionUploadDialog((current) => current ? {
+      ...current,
+      sourcePaths: Array.from(new Set([...current.sourcePaths, ...nextPaths])),
+      preview: null,
+    } : current);
+  }
+
+  async function handlePickVersionUploadFiles(): Promise<void> {
+    const paths = await window.movtools.dialog.pickFiles({
+      title: '选择版本文件',
+      filters: [{ name: '版本文件', extensions: ['ma', 'mov', 'mp4', 'm4v', 'avi', 'mxf', 'mpg', 'mpeg', 'wmv'] }],
+    });
+    mergeVersionUploadPaths(paths);
+  }
+
+  async function handlePickVersionUploadDirectory(): Promise<void> {
+    const directory = await window.movtools.dialog.pickDirectory();
+    if (directory) {
+      mergeVersionUploadPaths([directory]);
+    }
+  }
+
+  function handleVersionUploadDrop(event: React.DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    mergeVersionUploadPaths(window.movtools.dialog.getDroppedFilePaths(Array.from(event.dataTransfer.files)));
+  }
+
+  async function prepareVersionUpload(): Promise<void> {
+    if (!versionUploadDialog || versionUploadDialog.sourcePaths.length === 0) {
+      return;
+    }
+
+    setVersionUploadDialog((current) => current ? { ...current, isPreparing: true } : current);
+    try {
+      const response = await window.movtools.lens.prepareVersionUpload({
+        sourcePaths: versionUploadDialog.sourcePaths,
+        conflictStrategy: versionUploadDialog.conflictStrategy,
+      });
+      setVersionUploadDialog((current) => current ? { ...current, preview: response, isPreparing: false } : current);
+      if (!response.success) {
+        setResult({ success: false, error: response.error });
+      }
+    } catch (error) {
+      setVersionUploadDialog((current) => current ? { ...current, isPreparing: false } : current);
+      setResult({ success: false, error: error instanceof Error ? error.message : '生成上传预览失败。' });
+    }
+  }
+
+  async function commitVersionUpload(): Promise<void> {
+    if (!versionUploadDialog || versionUploadDialog.sourcePaths.length === 0) {
+      return;
+    }
+
+    if (versionUploadDialog.conflictStrategy === 'overwrite') {
+      const confirmed = window.confirm('将覆盖目标目录中已存在的同名版本文件。该操作可能替换已经归档的 MA 或拍屏视频，无法由系统自动恢复。是否继续？');
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setVersionUploadDialog((current) => current ? { ...current, isCommitting: true } : current);
+    try {
+      const response = await window.movtools.lens.commitVersionUpload({
+        sourcePaths: versionUploadDialog.sourcePaths,
+        conflictStrategy: versionUploadDialog.conflictStrategy,
+        overwriteConfirmed: versionUploadDialog.conflictStrategy === 'overwrite',
+      });
+      setVersionUploadDialog((current) => current ? { ...current, preview: response, isCommitting: false } : current);
+      setResult(response.success ? { success: true, affectedCount: response.summary.copiedCount + response.summary.overwrittenCount } : { success: false, error: response.error });
+
+      if (response.success) {
+        await refreshLenses();
+        if (activeDetail && response.affectedLensIds.includes(activeDetail.lens.lensId)) {
+          await refreshActiveDetail();
+        }
+      }
+    } catch (error) {
+      setVersionUploadDialog((current) => current ? { ...current, isCommitting: false } : current);
+      setResult({ success: false, error: error instanceof Error ? error.message : '执行上传版本文件失败。' });
+    }
+  }
+
   /** 导出筛选结果中的缺项镜头为 Excel 报告 */
   async function handleExportIssueReport(): Promise<void> {
     if (denyLensWrite()) return;
@@ -2379,6 +2537,7 @@ export function LensPage({ onNavigate }: LensPageProps) {
   }
 
   const allVisibleSelected = filteredLenses.length > 0 && filteredLenses.every((lens) => selectedLensIds.includes(lens.lensId));
+  const versionUploadCanCommit = Boolean(versionUploadDialog?.preview?.items.some((item) => item.status === 'ready' || item.status === 'will-overwrite' || item.status === 'exists-skip'));
   const debugLens = filteredLenses.find((lens) => lens.internalReviewStatusCode === 'PENDING_FEEDBACK_FIX') ?? filteredLenses[0] ?? null;
   const headerDebugText = debugLens
     ? `调试：role=${currentRole}；lens=${debugLens.lensCode}；status=${debugLens.internalReviewStatusCode ?? 'null'}；canFix=${String(canMarkFixUpdated(currentRole, debugLens.internalReviewStatusCode))}`
@@ -2629,6 +2788,9 @@ export function LensPage({ onNavigate }: LensPageProps) {
               <button className="secondary-button lens-feedback-button" disabled={filteredIssueLenses.length === 0} onClick={() => void handleExportIssueReport()} type="button">
                 导出缺项 Excel（{filteredIssueLenses.length}）
               </button>
+              <button className="secondary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={openVersionUploadDialog} type="button">
+                上传版本文件
+              </button>
               {canModifyLensList ? (
                 <>
                   <button className="primary-button lens-feedback-button" disabled={!activeProjectId || !activeEpisodeId} onClick={openCreateDialog} type="button">
@@ -2736,6 +2898,99 @@ export function LensPage({ onNavigate }: LensPageProps) {
       </div>
 
       {/* 镜头编辑器弹窗：创建或编辑镜头基本属性 */}
+      {versionUploadDialog ? (
+        <div className="lens-detail-modal-overlay" onClick={closeVersionUploadDialog} role="presentation">
+          <div className="lens-detail-modal version-upload-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="lens-detail-window-header">
+              <div>
+                <p className="eyebrow">本地归档</p>
+                <h3>上传版本文件</h3>
+                <p className="muted">按当前集镜头号匹配文件名，将 .ma 和拍屏视频复制到对应镜头文件夹。</p>
+              </div>
+              <button className="secondary-button" onClick={closeVersionUploadDialog} type="button">关闭</button>
+            </div>
+
+            <div className="version-upload-toolbar">
+              <div className="actions-row compact-actions wrap-actions">
+                <button className="secondary-button" onClick={() => void handlePickVersionUploadFiles()} type="button">选择文件</button>
+                <button className="secondary-button" onClick={() => void handlePickVersionUploadDirectory()} type="button">选择文件夹</button>
+              </div>
+              <label className="field version-upload-strategy">
+                <span>冲突策略</span>
+                <select
+                  disabled={versionUploadDialog.isPreparing || versionUploadDialog.isCommitting}
+                  onChange={(event) => setVersionUploadDialog((current) => current ? { ...current, conflictStrategy: event.target.value as VersionUploadConflictStrategy, preview: null } : current)}
+                  value={versionUploadDialog.conflictStrategy}
+                >
+                  <option value="skip">跳过已有文件</option>
+                  <option value="overwrite">覆盖已有文件</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="version-upload-drop-zone" onDragOver={(event) => event.preventDefault()} onDrop={handleVersionUploadDrop}>
+              <p>拖入文件或文件夹，支持 .ma、.mov、.mp4、.m4v、.avi、.mxf、.mpg、.mpeg、.wmv。</p>
+              {versionUploadDialog.sourcePaths.length > 0 ? (
+                <ul className="file-list version-upload-source-list">
+                  {versionUploadDialog.sourcePaths.map((sourcePath) => <li key={sourcePath}>{sourcePath}</li>)}
+                </ul>
+              ) : (
+                <p className="muted">尚未选择文件。</p>
+              )}
+            </div>
+
+            {versionUploadDialog.preview ? (
+              <div className="version-upload-summary">
+                <span>扫描 {versionUploadDialog.preview.summary.scannedCount}</span>
+                <span>可归档 {versionUploadDialog.preview.summary.readyCount}</span>
+                <span>覆盖 {versionUploadDialog.preview.summary.overwriteCount}</span>
+                <span>跳过 {versionUploadDialog.preview.summary.skippedCount}</span>
+                <span>失败 {versionUploadDialog.preview.summary.failedCount}</span>
+              </div>
+            ) : null}
+
+            {versionUploadDialog.preview?.items.length ? (
+              <div className="version-upload-table-shell">
+                <table className="version-upload-table">
+                  <thead>
+                    <tr>
+                      <th>文件名</th>
+                      <th>类型</th>
+                      <th>镜头号</th>
+                      <th>版本</th>
+                      <th>目标路径</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {versionUploadDialog.preview.items.map((item: VersionUploadItem) => (
+                      <tr key={item.itemId}>
+                        <td title={item.sourcePath}>{item.fileName}</td>
+                        <td>{item.fileType ?? '-'}</td>
+                        <td>{item.lensCode ?? '-'}</td>
+                        <td>{item.versionNum ?? '-'}</td>
+                        <td title={item.targetPath ?? item.error ?? ''}>{item.targetPath ?? item.error ?? '-'}</td>
+                        <td><span className={getVersionUploadStatusClassName(item.status)}>{getVersionUploadStatusLabel(item.status)}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            <div className="dialog-footer version-upload-footer">
+              <button className="primary-button" disabled={versionUploadDialog.sourcePaths.length === 0 || versionUploadDialog.isPreparing || versionUploadDialog.isCommitting} onClick={() => void prepareVersionUpload()} type="button">
+                {versionUploadDialog.isPreparing ? '预检中…' : '生成预览'}
+              </button>
+              <button className="primary-button" disabled={!versionUploadCanCommit || versionUploadDialog.isPreparing || versionUploadDialog.isCommitting} onClick={() => void commitVersionUpload()} type="button">
+                {versionUploadDialog.isCommitting ? '归档中…' : '确认归档'}
+              </button>
+              <button className="secondary-button" disabled={versionUploadDialog.isPreparing || versionUploadDialog.isCommitting} onClick={closeVersionUploadDialog} type="button">取消</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {editorDialog ? (
         <div className="lens-detail-modal-overlay" onClick={closeEditorDialog} role="presentation">
           <div className="lens-editor-modal panel stack-gap lens-editor-dialog" onClick={(event) => event.stopPropagation()}>

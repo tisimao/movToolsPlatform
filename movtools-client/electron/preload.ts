@@ -5,7 +5,7 @@
  * 通过 contextBridge 暴露有限的 API 给前端。
  * 前端通过 window.movtools 对象调用这些 API。
  */
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   EnvironmentStatus,
   AppSettings,
@@ -44,8 +44,12 @@ import type {
   LensMutationResponse,
   MovtoolsApi,
   OpenProjectRequest,
+  CommitVersionUploadRequest,
+  PrepareVersionUploadRequest,
   ProjectMutationResponse,
   ProjectWorkspace,
+  ResolveWorkbenchSourceMetadataRequest,
+  ResolveWorkbenchSourceMetadataResponse,
   SetActiveEpisodeRequest,
   UpdateReworkRecordRequest,
   UpdateLensRequest,
@@ -59,6 +63,7 @@ import type {
   ApplyProjectInitializationRequest,
   PrepareProjectInitializationRequest,
   PrepareProjectInitializationResponse,
+  WorkbenchLensSourcesResponse,
 } from '../src/types/ipc';
 
 const api: MovtoolsApi = {
@@ -115,6 +120,8 @@ const api: MovtoolsApi = {
   },
   lens: {
     list: (): Promise<LensListResponse> => ipcRenderer.invoke('lens:list'),
+    workbenchSources: (): Promise<WorkbenchLensSourcesResponse> => ipcRenderer.invoke('lens:workbenchSources'),
+    resolveWorkbenchSourceMetadata: (request: ResolveWorkbenchSourceMetadataRequest): Promise<ResolveWorkbenchSourceMetadataResponse> => ipcRenderer.invoke('lens:resolveWorkbenchSourceMetadata', request),
     detail: (request) => ipcRenderer.invoke('lens:detail', request),
     resolveLocalPreview: (request) => ipcRenderer.invoke('lens:resolveLocalPreview', request),
     create: (request: CreateLensRequest): Promise<LensMutationResponse> => ipcRenderer.invoke('lens:create', request),
@@ -128,6 +135,8 @@ const api: MovtoolsApi = {
     batchDelete: (request: BatchDeleteLensRequest): Promise<LensMutationResponse> => ipcRenderer.invoke('lens:batchDelete', request),
     import: (request: BatchImportLensRequest): Promise<LensMutationResponse> => ipcRenderer.invoke('lens:import', request),
     exportIssues: (request: ExportLensIssueReportRequest): Promise<ExportLensIssueReportResponse> => ipcRenderer.invoke('lens:exportIssues', request),
+    prepareVersionUpload: (request: PrepareVersionUploadRequest) => ipcRenderer.invoke('lens:prepareVersionUpload', request),
+    commitVersionUpload: (request: CommitVersionUploadRequest) => ipcRenderer.invoke('lens:commitVersionUpload', request),
   },
   task: {
     create: (request: CreateTaskRequest): Promise<CreateTaskResponse> => ipcRenderer.invoke('task:create', request),
@@ -161,6 +170,9 @@ const api: MovtoolsApi = {
   dialog: {
     pickFile: (options?: DialogPickFileOptions): Promise<string | null> => ipcRenderer.invoke('dialog:pickFile', options),
     pickFiles: (options?: DialogPickFileOptions): Promise<string[]> => ipcRenderer.invoke('dialog:pickFiles', options),
+    getDroppedFilePaths: (files: File[]): string[] => files
+      .map((file) => webUtils.getPathForFile(file))
+      .filter((filePath) => Boolean(filePath)),
     savePastedImage: (request: SavePastedImageRequest): Promise<string> => ipcRenderer.invoke('dialog:savePastedImage', request),
     saveAnnotationImage: (request) => ipcRenderer.invoke('dialog:saveAnnotationImage', request),
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),

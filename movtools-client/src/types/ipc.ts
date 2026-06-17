@@ -15,7 +15,17 @@
  */
 import { z } from 'zod';
 import type { AppSettings } from './settings';
-import type { LensDetailResponse, LensListResponse, LensRecord, LensStatus, LensStatusAction, MakerMatchStatus } from './lens';
+import type {
+  LensDetailResponse,
+  LensListResponse,
+  LensRecord,
+  LensStatus,
+  LensStatusAction,
+  MakerMatchStatus,
+  ResolveWorkbenchSourceMetadataRequest,
+  ResolveWorkbenchSourceMetadataResponse,
+  WorkbenchLensSourcesResponse,
+} from './lens';
 import type { BindFileType, FileCheckStatePayload, LensBoundFile, ScanRootConfigItem } from './fileCheck';
 import type { ExtractExecutionLogItem, ExtractFileSelection, ExtractHistoryResponse, ExtractPreviewResponse } from './extract';
 import type { EpisodeSummary, ProjectSummary, ProjectWorkspace } from './project';
@@ -31,7 +41,25 @@ import type {
   TrimTaskConfig,
 } from './task';
 
-export type { AppSettings, BindFileType, ExtractFileSelection, ExtractHistoryResponse, ExtractPreviewResponse, FileCheckStatePayload, LensDetailResponse, LensListResponse, LensRecord, LensStatus, LensStatusAction, MediaTask, TaskPayload, TaskType };
+export type {
+  AppSettings,
+  BindFileType,
+  ExtractFileSelection,
+  ExtractHistoryResponse,
+  ExtractPreviewResponse,
+  FileCheckStatePayload,
+  LensDetailResponse,
+  LensListResponse,
+  LensRecord,
+  LensStatus,
+  LensStatusAction,
+  MediaTask,
+  TaskPayload,
+  TaskType,
+  ResolveWorkbenchSourceMetadataRequest,
+  ResolveWorkbenchSourceMetadataResponse,
+  WorkbenchLensSourcesResponse,
+};
 export type { EpisodeSummary, ProjectSummary, ProjectWorkspace };
 
 // ============================================
@@ -83,6 +111,8 @@ const mergeVideoTaskConfigSchema = z.object({
   inputPaths: z.array(z.string().min(1)).min(2),
   mode: z.enum(['fast', 'compatible']),
   upscaleMode: z.enum(['pad', 'stretch']),
+  qualityPreset: z.enum(['standard', 'high', 'master']),
+  showFileNameOverlay: z.boolean(),
   overlayTexts: z.array(z.string()).optional(),
   overlayStyle: z.object({
     position: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']),
@@ -196,7 +226,8 @@ export interface TaskUpdatedEvent {
 
 export interface TaskLogAppendedEvent {
   taskId: string;
-  chunk: string;
+  chunk?: string;
+  chunks?: string[];
 }
 
 export interface TaskLogsResponse {
@@ -488,6 +519,65 @@ export interface ExportLensIssueReportRequest {
   mode?: 'all-issues' | 'missing-layout';
 }
 
+export type VersionUploadConflictStrategy = 'skip' | 'overwrite';
+export type VersionUploadFileType = 'ma' | 'mov';
+export type VersionUploadItemStatus =
+  | 'ready'
+  | 'will-overwrite'
+  | 'exists-skip'
+  | 'missing-target-folder'
+  | 'unmatched-lens'
+  | 'invalid-name'
+  | 'unsupported-type'
+  | 'missing-source'
+  | 'copied'
+  | 'overwritten'
+  | 'skipped'
+  | 'copy-failed';
+
+export interface PrepareVersionUploadRequest {
+  sourcePaths: string[];
+  conflictStrategy: VersionUploadConflictStrategy;
+}
+
+export interface CommitVersionUploadRequest extends PrepareVersionUploadRequest {
+  overwriteConfirmed?: boolean;
+}
+
+export interface VersionUploadItem {
+  itemId: string;
+  sourcePath: string;
+  fileName: string;
+  fileType?: VersionUploadFileType;
+  lensId?: string;
+  lensCode?: string;
+  versionNum?: string;
+  targetFolderPath?: string;
+  targetPath?: string;
+  status: VersionUploadItemStatus;
+  error?: string;
+}
+
+export interface VersionUploadSummary {
+  scannedCount: number;
+  supportedCount: number;
+  readyCount: number;
+  overwriteCount: number;
+  skippedCount: number;
+  copiedCount: number;
+  overwrittenCount: number;
+  failedCount: number;
+  affectedLensCount: number;
+}
+
+export interface VersionUploadResponse {
+  success: boolean;
+  items: VersionUploadItem[];
+  summary: VersionUploadSummary;
+  affectedLensIds: string[];
+  error?: string;
+}
+
 export interface LensMutationResponse {
   success: boolean;
   lens?: LensRecord;
@@ -634,6 +724,10 @@ export interface ResolveLensLocalPreviewResponse {
   layoutVideo?: ResolvedVideoPreviewPayload;
   error?: string;
 }
+
+export const resolveWorkbenchSourceMetadataRequestSchema = z.object({
+  sourcePath: z.string().min(1),
+}) satisfies z.ZodType<ResolveWorkbenchSourceMetadataRequest>;
 
 export const createTaskRequestSchema = z.object({
   items: z.array(
@@ -827,6 +921,17 @@ export const exportLensIssueReportRequestSchema = z.object({
   mode: z.enum(['all-issues', 'missing-layout']).optional(),
 });
 
+export const versionUploadConflictStrategySchema = z.enum(['skip', 'overwrite']);
+
+export const prepareVersionUploadRequestSchema = z.object({
+  sourcePaths: z.array(z.string().min(1)).min(1),
+  conflictStrategy: versionUploadConflictStrategySchema,
+}) satisfies z.ZodType<PrepareVersionUploadRequest>;
+
+export const commitVersionUploadRequestSchema = prepareVersionUploadRequestSchema.extend({
+  overwriteConfirmed: z.boolean().optional(),
+}) satisfies z.ZodType<CommitVersionUploadRequest>;
+
 export const fileCheckConfigRequestSchema = z.object({
   layoutTag: z.string(),
   lensRoots: z.array(scanRootConfigItemSchema),
@@ -935,6 +1040,8 @@ export interface MovtoolsApi {
   };
   lens: {
     list: () => Promise<LensListResponse>;
+    workbenchSources: () => Promise<WorkbenchLensSourcesResponse>;
+    resolveWorkbenchSourceMetadata: (request: ResolveWorkbenchSourceMetadataRequest) => Promise<ResolveWorkbenchSourceMetadataResponse>;
     detail: (request: GetLensDetailRequest) => Promise<LensDetailResponse>;
     resolveLocalPreview: (request: ResolveLensLocalPreviewRequest) => Promise<ResolveLensLocalPreviewResponse>;
     create: (request: CreateLensRequest) => Promise<LensMutationResponse>;
@@ -948,6 +1055,8 @@ export interface MovtoolsApi {
     batchDelete: (request: BatchDeleteLensRequest) => Promise<LensMutationResponse>;
     import: (request: BatchImportLensRequest) => Promise<LensMutationResponse>;
     exportIssues: (request: ExportLensIssueReportRequest) => Promise<ExportLensIssueReportResponse>;
+    prepareVersionUpload: (request: PrepareVersionUploadRequest) => Promise<VersionUploadResponse>;
+    commitVersionUpload: (request: CommitVersionUploadRequest) => Promise<VersionUploadResponse>;
   };
   task: {
     create: (request: CreateTaskRequest) => Promise<CreateTaskResponse>;
@@ -965,6 +1074,7 @@ export interface MovtoolsApi {
   dialog: {
     pickFile: (options?: DialogPickFileOptions) => Promise<string | null>; 
     pickFiles: (options?: DialogPickFileOptions) => Promise<string[]>;
+    getDroppedFilePaths: (files: File[]) => string[];
     savePastedImage: (request: SavePastedImageRequest) => Promise<string>;
     saveAnnotationImage: (request: SaveAnnotationImageRequest) => Promise<SaveAnnotationImageResponse>;
     pickDirectory: () => Promise<string | null>;

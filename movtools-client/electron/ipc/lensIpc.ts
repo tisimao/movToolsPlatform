@@ -4,19 +4,29 @@ import {
   batchImportLensRequestSchema,
   batchUpdateLensStatusRequestSchema,
   batchUpdateLensVersionTagRequestSchema,
+  commitVersionUploadRequestSchema,
   createLensRequestSchema,
   deleteLensRequestSchema,
   exportLensIssueReportRequestSchema,
   getLensDetailRequestSchema,
+  prepareVersionUploadRequestSchema,
   resolveLensLocalPreviewRequestSchema,
+  resolveWorkbenchSourceMetadataRequestSchema,
   updateLensRequestSchema,
   updateReworkRecordRequestSchema,
   updateLensStatusRequestSchema,
 } from '../../src/types/ipc';
 import { lensService } from '../services/lens/lensService';
+import { versionUploadService } from '../services/lens/versionUploadService';
 
 export function registerLensIpc(): void {
   ipcMain.handle('lens:list', async () => lensService.listLenses());
+  ipcMain.handle('lens:workbenchSources', async () => lensService.listWorkbenchSources());
+
+  ipcMain.handle('lens:resolveWorkbenchSourceMetadata', async (_event, request: unknown) => {
+    const parsed = resolveWorkbenchSourceMetadataRequestSchema.parse(request);
+    return lensService.resolveWorkbenchSourceMetadata(parsed);
+  });
 
   ipcMain.handle('lens:detail', async (_event, request: unknown) => {
     const parsed = getLensDetailRequestSchema.parse(request);
@@ -89,6 +99,16 @@ export function registerLensIpc(): void {
     }
 
     return lensService.exportIssueReport({ ...parsed, filePath: result.filePath });
+  });
+
+  ipcMain.handle('lens:prepareVersionUpload', async (_event, request: unknown) => {
+    const parsed = prepareVersionUploadRequestSchema.parse(request);
+    return versionUploadService.prepare(parsed);
+  });
+
+  ipcMain.handle('lens:commitVersionUpload', async (_event, request: unknown) => {
+    const parsed = commitVersionUploadRequestSchema.parse(request);
+    return versionUploadService.commit(parsed);
   });
 }
 
