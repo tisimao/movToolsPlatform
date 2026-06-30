@@ -1,0 +1,42 @@
+name: movtools
+
+services:
+  api:
+    image: ghcr.io/tisimao/movtools-server:latest
+    container_name: movtools-api
+    ports:
+      - "5001:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=movtools_server;Username=postgres;Password=${DB_PASSWORD}
+      - Jwt__Issuer=Movtools.Server.Production
+      - Jwt__Audience=Movtools.Client.Production
+      - Jwt__SigningKey=${JWT_SIGNING_KEY}
+      - Server__AllowedOrigins__0=http://localhost:3000
+      - Server__AllowedOrigins__1=http://localhost:5173
+      - Server__AllowedOrigins__2=http://127.0.0.1:3000
+      - Server__AllowedOrigins__3=http://127.0.0.1:5173
+      - Server__AllowedOrigins__4=${MOVTOOLS_SERVER_BASE_URL}
+      - Observability__MinimumLevel=Information
+      - Observability__IncludeScopes=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: movtools-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=movtools_server
+    volumes:
+      - /volume1/docker/movtools/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d movtools_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
